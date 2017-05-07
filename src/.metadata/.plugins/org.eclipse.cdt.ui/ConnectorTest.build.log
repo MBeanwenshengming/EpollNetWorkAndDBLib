@@ -1,0 +1,7 @@
+14:18:26 **** Clean-only build of configuration Debug for project ConnectorTest ****
+make clean 
+rm -rf  ./LConnectorTest.o ./LMainTest.o ./LMyErrorRecorder.o  ./LConnectorTest.d ./LMainTest.d ./LMyErrorRecorder.d  ConnectorTest_Debug
+ 
+
+14:18:26 Build Finished (took 114ms)
+

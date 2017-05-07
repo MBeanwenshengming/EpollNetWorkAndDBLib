@@ -1,0 +1,416 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) <2010-2020> <wenshengming>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+*/
+
+#include "LVarLenCircleBuf.h"
+
+/*
+ * 	数据组织形式如下	{|head1|data1|}{|head2|data2|}.....{|headN|dataN|}
+ */
+LVarLenCircleBuf::LVarLenCircleBuf()
+{
+	__sync_lock_test_and_set(&m_ReadIndex, 0);
+	__sync_lock_test_and_set(&m_WriteIndex, 0);
+
+	m_pbuf				= NULL;
+	m_unTotalBufLen 	= 0;
+
+}
+
+LVarLenCircleBuf::~LVarLenCircleBuf()
+{
+	if (m_pbuf != NULL)
+	{
+		delete[] m_pbuf;
+		m_pbuf 				= NULL;
+		m_unTotalBufLen 	= 0;
+	}
+}
+
+//	初始化环形缓存区
+bool LVarLenCircleBuf::InitializeVarLenCircleBuf(unsigned int unTotalBufLen)
+{
+	if (unTotalBufLen == 0)
+	{
+		return false;
+	}
+	m_unTotalBufLen = unTotalBufLen;
+	m_pbuf = new char[unTotalBufLen];
+	if (m_pbuf == NULL)
+	{
+		return false;
+	}
+	return true;
+}
+//	添加一次数据
+//	pDataBuf 需要添加的数据的缓存
+//	unDataLen 要添加的数据的长度
+E_Circle_Error LVarLenCircleBuf::AddData(char* pDataBuf, unsigned int unDataLen)
+{
+	if (m_pbuf == NULL)
+	{
+		return E_Circle_Buf_Uninitialized;
+	}
+	if (pDataBuf == NULL || unDataLen == 0)
+	{
+		return E_Circle_Buf_Input_Buf_Null;
+	}
+	//	写入数据时，增加4字节的头,总长度加4字节
+	unsigned int unTotalDataLenToWrite = unDataLen + 4;
+	if (unTotalDataLenToWrite >= m_unTotalBufLen)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex 	= m_WriteIndex;
+
+	int nFreeItemCount = 0;
+	if (nWriteIndex < nReadIndex)
+	{
+		nFreeItemCount = nReadIndex - nWriteIndex;
+	}
+	else
+	{
+		nFreeItemCount = m_unTotalBufLen + nReadIndex - nWriteIndex;
+	}
+	if (nFreeItemCount <= 1)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+	if (nFreeItemCount - 1 < unTotalDataLenToWrite)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+	if (nWriteIndex < nReadIndex)
+	{
+		//	先写入头部
+		memcpy(m_pbuf + nWriteIndex, &unTotalDataLenToWrite, sizeof(unsigned int));
+		nWriteIndex += sizeof(unsigned int);
+		//	写入数据
+		memcpy(m_pbuf + nWriteIndex, pDataBuf, unDataLen);
+		nWriteIndex += unDataLen;
+		//	修改数据写入位置
+		__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+	}
+	else
+	{
+		//	当前写入位置到缓存结尾可以放下要写入的全部，那么直接写入数据
+		if (nWriteIndex + unTotalDataLenToWrite <= m_unTotalBufLen)
+		{
+			//	先写入头部
+			memcpy(m_pbuf + nWriteIndex, &unTotalDataLenToWrite, sizeof(unsigned int));
+			nWriteIndex += sizeof(unsigned int);
+			//	写入数据
+			memcpy(m_pbuf + nWriteIndex, pDataBuf, unDataLen);
+			nWriteIndex += unDataLen;
+
+			if (nWriteIndex == m_unTotalBufLen)
+			{
+				nWriteIndex = 0;
+			}
+			__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+		}
+		else	//	当前写入位置到缓存结尾，放不下数据，那么需要分开写入数据
+		{
+			//	判断是否可以写下头，即4个字节
+			int nBytesToEnd = m_unTotalBufLen - nWriteIndex;
+			if (nBytesToEnd >= sizeof(unsigned int))			//	大于等于4个字节，那么咸写入4个字节的头
+			{
+				//	先写入头部
+				memcpy(m_pbuf + nWriteIndex, &unTotalDataLenToWrite, sizeof(unsigned int));
+				nWriteIndex += sizeof(unsigned int);
+				//	数据分两部分写，一部分写在缓存的尾部，一部分写在缓存的头部
+				if (nBytesToEnd == sizeof(unsigned int))		//	说明只写了缓存的头部就到缓存的最后了，那么直接从头部开始写数据
+				{
+					nWriteIndex = 0;
+					memcpy(m_pbuf + nWriteIndex, pDataBuf, unDataLen);
+					nWriteIndex += unDataLen;
+					//	改变写入位置
+					__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+				}
+				else	//	写完头部，还有一部分空间写数据
+				{
+					int nToEndLeftBytesToWriteData = m_unTotalBufLen - nWriteIndex;
+					memcpy(m_pbuf + nWriteIndex, pDataBuf, nToEndLeftBytesToWriteData);
+					nWriteIndex = 0;
+					memcpy(m_pbuf + nWriteIndex, pDataBuf + nToEndLeftBytesToWriteData, unDataLen - nToEndLeftBytesToWriteData);
+					nWriteIndex = unDataLen - nToEndLeftBytesToWriteData;
+					__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+				}
+			}
+			else	//	头部都写不下了，那么头部分两部分写，数据一次写入
+			{
+				int nBytesToEnd = m_unTotalBufLen - nWriteIndex;	//	这个数据一定小于4个字节
+				assert(nBytesToEnd < 4);
+				char* pHead = (char*)&unTotalDataLenToWrite;		//	头部分两次写入
+				memcpy(m_pbuf + nWriteIndex, pHead, nBytesToEnd);
+				nWriteIndex = 0;
+				memcpy(m_pbuf, pHead + nBytesToEnd, sizeof(unsigned int) - nBytesToEnd);
+				nWriteIndex += sizeof(unsigned int) - nBytesToEnd;
+				//	数据一次写入
+				memcpy(m_pbuf + nWriteIndex, pDataBuf, unDataLen);
+				nWriteIndex += unDataLen;
+				__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+			}
+		}
+	}
+	return E_Circle_Buf_No_Error;
+}
+//	添加数据，在数据前面添加SessionID，主要是向接收数据包环形缓存中加入数据
+E_Circle_Error LVarLenCircleBuf::AddSessionIDAndData(uint64_t u64SessionID, char* pDataBuf, unsigned int unDataLen)
+{
+	if (m_pbuf == NULL)
+	{
+		return E_Circle_Buf_Uninitialized;
+	}
+	if (pDataBuf == NULL || unDataLen == 0 || u64SessionID == 0)
+	{
+		return E_Circle_Buf_Input_Buf_Null;
+	}
+	//	写入数据时，增加4字节的头,总长度加4字节,并且写入SessionID
+	unsigned int unTotalDataLenToWrite = unDataLen + 4 + sizeof(uint64_t);
+	if (unTotalDataLenToWrite >= m_unTotalBufLen)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex 	= m_WriteIndex;
+
+	int nFreeItemCount = 0;
+	if (nWriteIndex < nReadIndex)
+	{
+		nFreeItemCount = nReadIndex - nWriteIndex;
+	}
+	else
+	{
+		nFreeItemCount = m_unTotalBufLen + nReadIndex - nWriteIndex;
+	}
+	if (nFreeItemCount <= 1)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+	if (nFreeItemCount - 1 < unTotalDataLenToWrite)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+	if (nWriteIndex < nReadIndex)
+	{
+		//	先写入头部
+		memcpy(m_pbuf + nWriteIndex, &unTotalDataLenToWrite, sizeof(unsigned int));
+		nWriteIndex += sizeof(unsigned int);
+		//	再写入SessionID
+		memcpy(m_pbuf + nWriteIndex, &u64SessionID, sizeof(uint64_t));
+		nWriteIndex += sizeof(uint64_t);
+		//	写入数据
+		memcpy(m_pbuf + nWriteIndex, pDataBuf, unDataLen);
+		nWriteIndex += unDataLen;
+		//	修改数据写入位置
+		__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+	}
+	else
+	{
+		//	当前写入位置到缓存结尾可以放下要写入的全部，那么直接写入数据
+		if (nWriteIndex + unTotalDataLenToWrite <= m_unTotalBufLen)
+		{
+			//	先写入头部
+			memcpy(m_pbuf + nWriteIndex, &unTotalDataLenToWrite, sizeof(unsigned int));
+			nWriteIndex += sizeof(unsigned int);
+			//	再写入SessionID
+			memcpy(m_pbuf + nWriteIndex, &u64SessionID, sizeof(uint64_t));
+			nWriteIndex += sizeof(uint64_t);
+			//	写入数据
+			memcpy(m_pbuf + nWriteIndex, pDataBuf, unDataLen);
+			nWriteIndex += unDataLen;
+
+			if (nWriteIndex == m_unTotalBufLen)
+			{
+				nWriteIndex = 0;
+			}
+			__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+		}
+		else	//	当前写入位置到缓存结尾，放不下数据，那么需要分开写入数据
+		{
+			//	判断是否可以写下头，即4个字节
+			int nBytesToEnd = m_unTotalBufLen - nWriteIndex;
+			if (nBytesToEnd >= sizeof(unsigned int) + sizeof(uint64_t))			//	头部和SessionID一次写入，数据分两次写入
+			{
+				//	先写入头部
+				memcpy(m_pbuf + nWriteIndex, &unTotalDataLenToWrite, sizeof(unsigned int));
+				nWriteIndex += sizeof(unsigned int);
+				//	再写入SessionID
+				memcpy(m_pbuf + nWriteIndex, &u64SessionID, sizeof(uint64_t));
+				nWriteIndex += sizeof(uint64_t);
+				if (nWriteIndex == m_unTotalBufLen)
+				{
+					nWriteIndex = 0;
+				}
+				//	第一部分数据写入长度
+				int nFirstWriteCount = nBytesToEnd - sizeof(unsigned int) - sizeof(uint64_t);
+				memcpy(m_pbuf + nWriteIndex, pDataBuf, nFirstWriteCount);
+				nWriteIndex += nFirstWriteCount;
+				if (nWriteIndex == m_unTotalBufLen)
+				{
+					nWriteIndex = 0;
+				}
+
+			}
+			else
+			{
+				if (nBytesToEnd >= sizeof(unsigned int))		//	大于4字节，那么头部一次写入，SessionID分两次写入，数据一次写入
+				{
+					 if ()
+				}
+				else	//	头部分两次写入，SessionID一次写入，数据一次写入
+				{
+
+				}
+			}
+		}
+	}
+
+	return E_Circle_Buf_No_Error;
+}
+
+//	获取一次数据，成功获取后，数据写在pDataBuf缓存中
+//	pDataBuf 获取数据的缓存
+//	unDataBufLen 缓存的长度
+//	unGettedDataLen 获取的数据的长度
+E_Circle_Error LVarLenCircleBuf::GetData(char* pDataBuf, unsigned int unDataBufLen, unsigned int& unGettedDataLen)
+{
+	if (m_pbuf == NULL)
+	{
+		return E_Circle_Buf_Uninitialized;
+	}
+	if (pDataBuf == NULL || unDataBufLen == 0)
+	{
+		return E_Circle_Buf_Input_Buf_Null;
+	}
+
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex 	= m_WriteIndex;
+	if (nReadIndex == nWriteIndex)
+	{
+		return E_Circle_Buf_Is_Empty;
+	}
+	int nCurrentDataCount  = 0;
+	if (nReadIndex < nWriteIndex)
+	{
+		nCurrentDataCount = nWriteIndex - nReadIndex;
+	}
+	else
+	{
+		nCurrentDataCount = m_unTotalBufLen + nWriteIndex - nReadIndex;
+	}
+	if (nCurrentDataCount <= sizeof(unsigned int))	//	如果有数据，少于等于4个字节，那么肯定出错了
+	{
+		return E_Circle_Buf_Fatal_Error;
+	}
+	int nDataToEnd = m_unTotalBufLen - nReadIndex;
+	if (nDataToEnd >= sizeof(unsigned int))		//	判断读取的数据时，头部是否可以一次读取
+	{
+		int nTotalDataLen = *((int*)(m_pbuf + nReadIndex));
+		if (nTotalDataLen <= sizeof(unsigned int) || nTotalDataLen > nCurrentDataCount)
+		{
+			return E_Circle_Buf_Fatal_Error;
+		}
+		if (nDataToEnd >= nTotalDataLen)	//	到结尾的距离大于现在的数据包长度，那么数据全部在当前位置到尾部之间
+		{
+			memcpy(pDataBuf, m_pbuf + nReadIndex + sizeof(unsigned int), nTotalDataLen - sizeof(unsigned int));
+			nReadIndex += nTotalDataLen;
+			if (nReadIndex == m_unTotalBufLen)
+			{
+				nReadIndex = 0;
+			}
+			__sync_lock_test_and_set(&m_ReadIndex, nReadIndex);
+		}
+		else		//	有一部分数据在缓存的头部
+		{
+			int nFirstReadDataLen = nDataToEnd - sizeof(unsigned int);
+			memcpy(pDataBuf, m_pbuf + nReadIndex + sizeof(unsigned int), nFirstReadDataLen);
+			nReadIndex = 0;
+
+			int nSecondReadDataLen = nTotalDataLen - nFirstReadDataLen - sizeof(unsigned int);
+			memcpy(pDataBuf + nFirstReadDataLen, m_pbuf, nSecondReadDataLen);
+			nReadIndex = nSecondReadDataLen;
+
+			__sync_lock_test_and_set(&m_ReadIndex, nReadIndex);
+		}
+		unGettedDataLen = nTotalDataLen - sizeof(unsigned int);
+	}
+	else	//	到结尾部分，头部不能一次读取出来，那么需要分两次读取头部，一次读取数据
+	{
+		int nFirstHeadReadLen = nDataToEnd;
+		assert(nFirstHeadReadLen < sizeof(unsigned int));
+		int nSecondHeadReadLen = sizeof(unsigned int) - nFirstHeadReadLen;
+		int nTotalDataLen = 0;
+		char* pHeadBuf = (char*)&nTotalDataLen;
+		memcpy(pHeadBuf, m_pbuf + nReadIndex, nFirstHeadReadLen);
+		memcpy(pHeadBuf + nFirstHeadReadLen, m_pbuf, nSecondHeadReadLen);
+		if (nTotalDataLen <= sizeof(unsigned int) || nTotalDataLen > nCurrentDataCount)
+		{
+			return E_Circle_Buf_Fatal_Error;
+		}
+		nReadIndex = nSecondHeadReadLen;
+
+		memcpy(pDataBuf, m_pbuf + nReadIndex, nTotalDataLen - sizeof(unsigned int));
+		unGettedDataLen = nTotalDataLen - sizeof(unsigned int);
+		nReadIndex += nTotalDataLen - sizeof(unsigned int);
+		__sync_lock_test_and_set(&m_ReadIndex, nReadIndex);
+	}
+	return E_Circle_Buf_No_Error;
+}
+
+void LVarLenCircleBuf::SetCurrentReadAndWriteIndex(int nReadIndex, int nWriteIndex)
+{
+	__sync_lock_test_and_set(&m_ReadIndex, nReadIndex);
+	__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+}
+void LVarLenCircleBuf::ClearContent()
+{
+	__sync_lock_test_and_set(&m_ReadIndex, 0);
+	__sync_lock_test_and_set(&m_WriteIndex, 0);
+}
+int LVarLenCircleBuf::GetCurrentExistCount()
+{
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex	= m_WriteIndex;
+	if (nWriteIndex == nReadIndex)
+	{
+		return 0;
+	}
+	if (nWriteIndex > nReadIndex)
+	{
+		return nWriteIndex - nReadIndex;
+	}
+	else
+	{
+		return m_unTotalBufLen - nReadIndex + nWriteIndex;
+	}
+}
+void LVarLenCircleBuf::GetCurrentReadAndWriteIndex(int& nReadIndex, int& nWriteIndex)
+{
+	nReadIndex 		= m_ReadIndex;
+	nWriteIndex 	= m_WriteIndex;
+}

@@ -1,0 +1,18 @@
+/*
+ * ConnectorThread.cpp
+ *
+ *  Created on: 2015年10月27日
+ *      Author: wenshengming
+ */
+
+#include "ConnectorThread.h"
+
+ConnectorThread::ConnectorThread() {
+	// TODO Auto-generated constructor stub
+
+}
+
+ConnectorThread::~ConnectorThread() {
+	// TODO Auto-generated destructor stub
+}
+

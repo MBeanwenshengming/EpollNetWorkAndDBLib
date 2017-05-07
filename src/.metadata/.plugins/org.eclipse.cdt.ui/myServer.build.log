@@ -1,0 +1,7 @@
+14:18:27 **** Clean-only build of configuration Debug for project myServer ****
+make clean 
+rm -rf  ./LMainLogicBroadCast.o ./LMainTest.o ./LMyErrorRecorder.o  ./LMainLogicBroadCast.d ./LMainTest.d ./LMyErrorRecorder.d  myServer_Debug
+ 
+
+14:18:27 Build Finished (took 105ms)
+

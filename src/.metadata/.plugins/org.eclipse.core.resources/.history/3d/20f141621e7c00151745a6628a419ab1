@@ -1,0 +1,22 @@
+/*
+ * ConnectorThread.h
+ *
+ *  Created on: 2015年10月27日
+ *      Author: wenshengming
+ */
+
+#ifndef CONNECTORTHREAD_H_
+#define CONNECTORTHREAD_H_
+#include "LThreadBase.h"
+
+class ConnectorThread : public LThreadBase
+{
+public:
+	ConnectorThread();
+	virtual ~ConnectorThread();
+public:
+private:
+
+};
+
+#endif /* CONNECTORTHREAD_H_ */

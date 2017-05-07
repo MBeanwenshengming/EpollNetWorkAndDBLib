@@ -1,0 +1,169 @@
+/*
+ * ConnectorThread.cpp
+ *
+ *  Created on: 2015年10月27日
+ *      Author: wenshengming
+ */
+
+#include "ConnectorThread.h"
+
+ConnectorThread::ConnectorThread()
+{
+	m_nSocket = -1;
+}
+
+ConnectorThread::~ConnectorThread()
+{
+}
+
+int ConnectorThread::ThreadDoing(void* pParam)
+{
+	time_t tLastPrintInfo = time(NULL);
+	char szRecvedBuf[128 * 1024]; memset(szRecvedBuf, 0, sizeof(szRecvedBuf));
+	char szTempSendBuf[128 * 1024]; memset(szTempSendBuf, 0, sizeof(szTempSendBuf));
+	unsigned int unRemainedDataLen = 0;
+	bool bSendable = true;
+	int nLastSendIndex = 1;
+	int nLastRecvIndex = 0;
+	int nPacketRecvedCount = 0;
+	int nPacketSendCount = 0;
+	int nBroadCastIndex = 0;
+	while(1)
+	{
+		if (bSendable)
+		{
+			unsigned short usPacketLen = 11 + random() % 1000;
+
+			LPacketSingle packetToSend(usPacketLen);
+			BuildRandomPacket(&packetToSend, false, nLastSendIndex);
+
+			unsigned short usSendDataAll = sizeof(unsigned short) + packetToSend.GetDataLen();
+			memcpy(szTempSendBuf, &usSendDataAll, sizeof(unsigned short));
+			memcpy(szTempSendBuf + sizeof(unsigned short), packetToSend.GetDataBuf(), packetToSend.GetDataLen());
+
+			int nSendResult = send(m_nSocket, szTempSendBuf, usSendDataAll, 0);
+			if (nSendResult == -1)
+			{
+				printf("Send Failed, result code:%d, systemErrorcode:%d\n", nSendResult, errno);
+				break;
+			}
+			bSendable = false;
+			nPacketSendCount++;
+		}
+		int nRecvResult = recv(m_nSocket, szRecvedBuf + unRemainedDataLen, 128 * 1024 - unRemainedDataLen, 0);
+		if (nRecvResult == -1)
+		{
+			printf("Recv Failed, result code:%d, systemErrorcode:%d\n", nRecvResult, errno);
+			break;
+		}
+		unRemainedDataLen += nRecvResult;
+		while (unRemainedDataLen > sizeof(unsigned short))
+		{
+			unsigned short usPacketLen = *((unsigned short*)szRecvedBuf);
+			if (usPacketLen <= sizeof(unsigned short))
+			{
+				printf("recv error len\n");
+				break;
+			}
+			if (usPacketLen > 8196)
+			{
+				printf("recv error len, Max\n");
+				break;
+			}
+
+			if (unRemainedDataLen >= usPacketLen)
+			{
+				LPacketSingle packetToRecved(20 * 1024);
+				packetToRecved.DirectSetData(szRecvedBuf + sizeof(unsigned short), usPacketLen - sizeof(unsigned short));
+
+				if (!packetToRecved.CheckCRC32Code())
+				{
+					printf("Packet Receive CrC32Code Error\n");
+				}
+				char cPacketType = 0;
+				packetToRecved.GetChar(cPacketType);
+
+
+				packetToRecved.GetInt(nLastRecvIndex);
+
+
+				if (cPacketType == 0)
+				{
+					if (nLastRecvIndex != nLastSendIndex - 1)
+					{
+						printf("RecvIndex:%d, LastSendIndex:%d\n", nLastRecvIndex, nLastSendIndex);
+					}
+					else
+					{
+						bSendable = true;
+					}
+				}
+				else if (cPacketType == 1)
+				{
+					if (nBroadCastIndex == 0)
+					{
+						nBroadCastIndex = nLastRecvIndex;
+					}
+					if (nLastRecvIndex != nBroadCastIndex)
+					{
+						printf("LastBroadCastRecvIndex:%d, LastSendIndex:%d, BroadCastIndex:%d\n", nLastRecvIndex, nLastSendIndex, nBroadCastIndex);
+					}
+					nBroadCastIndex++;
+				}
+				else
+				{
+					printf("ErrorPacketType\n");
+				}
+
+				unRemainedDataLen -= usPacketLen;
+				memcpy(szRecvedBuf, szRecvedBuf + usPacketLen, unRemainedDataLen);
+
+				nPacketRecvedCount++;
+			}
+			else
+			{
+				break;
+			}
+		}
+		time_t tNow = time(NULL);
+		if (tNow - tLastPrintInfo > 1)
+		{
+			printf("SendCount:%d, RecvCount:%d\n", nPacketSendCount, nPacketRecvedCount);
+			tLastPrintInfo = tNow;
+		}
+	}
+}
+bool ConnectorThread::OnStart()
+{
+	m_nSocket = socket(AF_INET, SOCK_STREAM, 0);
+	if (m_nSocket == -1)
+	{
+		return false;
+	}
+	sockaddr_in sockaddr;
+	memset(&sockaddr, 0, sizeof(sockaddr));
+	sockaddr.sin_family = AF_INET;
+	sockaddr.sin_port	= htons(12000);
+
+	int nsucc = inet_aton("127.0.0.1", &sockaddr.sin_addr);
+	if (nsucc == 0)
+	{
+		close(m_nSocket);
+		return false;
+	}
+	nsucc = connect(m_nSocket, (struct sockaddr*)&sockaddr, sizeof(sockaddr));
+	if (nsucc != 0)
+	{
+		return false;
+	}
+
+	return true;
+}
+void ConnectorThread::OnStop()
+{
+	if (m_nSocket != -1)
+	{
+		close(m_nSocket);
+		m_nSocket = -1;
+	}
+}

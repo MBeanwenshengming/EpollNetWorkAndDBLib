@@ -1,0 +1,52 @@
+/*
+ * ConnectorThread.cpp
+ *
+ *  Created on: 2015年10月27日
+ *      Author: wenshengming
+ */
+
+#include "ConnectorThread.h"
+
+ConnectorThread::ConnectorThread()
+{
+	m_nSocket = -1;
+}
+
+ConnectorThread::~ConnectorThread()
+{
+}
+
+int ConnectorThread::ThreadDoing(void* pParam)
+{
+
+}
+bool ConnectorThread::OnStart()
+{
+	m_nSocket = socket(AF_INET, SOCK_STREAM, 0);
+	if (m_nSocket == -1)
+	{
+		return -1;
+	}
+	sockaddr_in sockaddr;
+	memset(&sockaddr, 0, sizeof(sockaddr));
+	sockaddr.sin_family = AF_INET;
+	sockaddr.sin_port	= htons(12000);
+	//	sockaddr.sin_addr.s_addr
+	int nsucc = inet_aton("127.0.0.1", &sockaddr.sin_addr);
+	if (nsucc == 0)
+	{
+		close(nSocket);
+		return -2;
+	}
+	nsucc = connect(m_nSocket, (struct sockaddr*)&sockaddr, sizeof(sockaddr));
+	if (nsucc != 0)
+	{
+		return -3;
+	}
+	time_t tLastPrintInfo = time(NULL);
+	return true;
+}
+void ConnectorThread::OnStop()
+{
+
+}

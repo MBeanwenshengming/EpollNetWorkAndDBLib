@@ -1,0 +1,7 @@
+14:18:27 **** Clean-only build of configuration Debug for project singleconnector ****
+make clean 
+rm -rf  ./ConnectorThread.o ./LMainTest.o  ./ConnectorThread.d ./LMainTest.d  singleconnector_Debug
+ 
+
+14:18:27 Build Finished (took 56ms)
+

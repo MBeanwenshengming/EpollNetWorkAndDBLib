@@ -1,0 +1,17 @@
+/*
+ * ConnectorThread.h
+ *
+ *  Created on: 2015年10月27日
+ *      Author: wenshengming
+ */
+
+#ifndef CONNECTORTHREAD_H_
+#define CONNECTORTHREAD_H_
+
+class ConnectorThread {
+public:
+	ConnectorThread();
+	virtual ~ConnectorThread();
+};
+
+#endif /* CONNECTORTHREAD_H_ */

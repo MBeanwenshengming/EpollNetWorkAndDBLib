@@ -1,0 +1,29 @@
+K 25
+svn:wc:ra_dav:version-url
+V 33
+/svn/!svn/ver/3/trunk/DBLib/DBLib
+END
+objects.mk
+K 25
+svn:wc:ra_dav:version-url
+V 44
+/svn/!svn/ver/3/trunk/DBLib/DBLib/objects.mk
+END
+sources.mk
+K 25
+svn:wc:ra_dav:version-url
+V 44
+/svn/!svn/ver/3/trunk/DBLib/DBLib/sources.mk
+END
+makefile
+K 25
+svn:wc:ra_dav:version-url
+V 42
+/svn/!svn/ver/3/trunk/DBLib/DBLib/makefile
+END
+subdir.mk
+K 25
+svn:wc:ra_dav:version-url
+V 43
+/svn/!svn/ver/3/trunk/DBLib/DBLib/subdir.mk
+END

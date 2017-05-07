@@ -1,0 +1,170 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) <2010-2020> <wenshengming>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+*/
+
+#include "LConnectorTest.h"
+#include "LPacketSingle.h"
+#include "stdio.h"
+#include <string>
+
+LConnectorTest::LConnectorTest()
+{
+	memset(m_szGettedOnePacket, 0, sizeof(m_szGettedOnePacket));
+	m_unGettedOnePacketLen = 0;
+	m_tLastSendData = 0;
+
+	m_nLastRecvIndex	= 1;
+	m_nLastSendIndex	= 1;
+}
+
+LConnectorTest::~LConnectorTest()
+{
+}
+
+bool LConnectorTest::Initialize(char* pConfigFileName)
+{
+	if (pConfigFileName == NULL)
+	{
+		return false;
+	}
+	if (!m_ConfigProcessor.Initialize(pConfigFileName, "Test", true))
+	{
+		return false;
+	}
+	if (!m_Connector.Initialize(m_ConfigProcessor.GetConnectorInitializeParams()))
+	{
+		return false;
+	}
+	return true;
+}
+
+int LConnectorTest::ThreadDoing(void* pParam)
+{
+	while (1)
+	{
+		unsigned int unGettedOnePacketLen = 0;
+		int nGettedSuccessed = m_Connector.GetOneRecvedPacket(m_szGettedOnePacket, 64 * 1024, unGettedOnePacketLen);
+
+		if (nGettedSuccessed == 0)
+		{
+			LPacketSingle lPakcetSingle(20 * 1024);
+			lPakcetSingle.DirectSetData(m_szGettedOnePacket, unGettedOnePacketLen);
+
+			if (!lPakcetSingle.CheckCRC32Code())
+			{
+				printf("Packet Receive CrC32Code Error\n");
+			}
+			char cPacketType = 0;
+			lPakcetSingle.GetChar(cPacketType);
+
+			int nLastRecvIndex = 0;
+			lPakcetSingle.GetInt(nLastRecvIndex);
+
+			if (nLastRecvIndex != m_nLastRecvIndex)
+			{
+				printf("RecvIndex:%d, LastSendIndex:%d\n", nLastRecvIndex, m_nLastRecvIndex);
+			}
+			m_nLastRecvIndex++;
+			//	处理接收的数据包
+			//printf("Recved:%s\n", lPakcetSingle.GetDataBuf() + 7);
+		}
+		else
+		{
+			//sched_yield(); 
+			struct timespec timeReq;
+			timeReq.tv_sec 	= 0;
+			timeReq.tv_nsec = 10;
+			nanosleep(&timeReq, NULL);
+		}
+		time_t tNow = time(NULL);
+		//	查看是否需要发送数据包
+		if (m_Connector.IsConnectted() && (m_tLastSendData == 0 || tNow - m_tLastSendData >= 1))
+		{
+			unsigned short usPacketLen = 11 + random() % 1000;
+
+			LPacketSingle packetToSend(usPacketLen);
+			BuildRandomPacket(&packetToSend, false, m_nLastSendIndex);
+			//printf("send:%s\n", packetToSend.GetDataBuf() + 7);
+			m_Connector.SendPacket(packetToSend.GetDataBuf(), packetToSend.GetDataLen());
+			//m_tLastSendData = tNow;
+		}
+	}
+	return 0;
+}
+bool LConnectorTest::OnStart()
+{
+	return true;
+}
+void LConnectorTest::OnStop()
+{
+	m_Connector.Stop();
+	return ;
+}
+
+bool LConnectorTest::BuildRandomPacket(LPacketSingle* pPacket, bool bBroadCast, int& nPacketSendIndex)
+{
+	if (pPacket == NULL)
+	 {
+	  return false;
+	 }
+	 unsigned short usReserveBytes = 4 + 2 + 1 + 4;
+	 unsigned short usPacketBufLenAllBytes = pPacket->GetPacketBufLen();
+	 if (usPacketBufLenAllBytes < usReserveBytes)
+	 {
+	  return false;
+	 }
+	 // 留下4字节填写CRC32码和2字节包头，1字节数据包类型(单播0，广播1)，4字节的数据包顺序
+	 unsigned short usPacketRandomBufLen = pPacket->GetPacketBufLen() - usReserveBytes;
+	 if (usPacketRandomBufLen >= 8000)
+	 {
+	  return false;
+	 }
+
+	 unsigned short usPacketLenVar = usPacketRandomBufLen;
+	 char szPacketbuf[8000]; memset(szPacketbuf, 0, sizeof(szPacketbuf));
+	 int nLen = 0;
+	 while (usPacketLenVar--)
+	 {
+	  if (rand() % 2 == 0)
+	  {
+	   szPacketbuf[nLen] = 'a' + rand() % 26;
+	  }
+	  else
+	  {
+	   szPacketbuf[nLen] = 'A' + rand() % 26;
+	  }
+	  nLen++;
+	 }
+
+	 char cPacketType = bBroadCast ? 1 : 0;
+	 int npacketID = nPacketSendIndex;
+
+	 pPacket->AddChar(cPacketType);
+	 pPacket->AddInt(npacketID);
+	 pPacket->AddData(szPacketbuf, usPacketRandomBufLen);
+	 pPacket->MakeCRC32CodeToPacket();
+	 nPacketSendIndex++;
+
+	 pPacket->CheckCRC32Code();
+	 return true;
+}

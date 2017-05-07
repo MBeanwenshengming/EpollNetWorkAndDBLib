@@ -1,0 +1,7 @@
+14:18:26 **** Clean-only build of configuration Debug for project DBLib ****
+make clean 
+rm -rf  ./XDBBase.o ./XMySqlConnector.o ./XSqlServerConnector.o  ./XDBBase.d ./XMySqlConnector.d ./XSqlServerConnector.d  libDBLib_Debug.a
+ 
+
+14:18:27 Build Finished (took 57ms)
+

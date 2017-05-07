@@ -1,0 +1,144 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) <2010-2020> <wenshengming>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+*/
+
+#include "LNetWorkServices.h"
+#include "LServerBaseNetWork.h"
+#include "LNetWorkConfigFileProcessor.h"
+
+bool g_bEpollETEnabled = false;
+
+
+LServerBaseNetWork::LServerBaseNetWork()
+{
+	m_pNetWorkServices 			= NULL;
+	memset(m_szTempSendData, 0, MAX_TEMP_SEND_DATA_BUF_LEN);
+	m_usTempDataLen				= 0;
+}
+LServerBaseNetWork::~LServerBaseNetWork()
+{
+}
+
+bool LServerBaseNetWork::InitializeNetWork(char* pConfigFile, unsigned int unMaxNumProcessPacketOnce, char* pSectionHeader, bool bInitializeAccept)
+{
+	if (pConfigFile == NULL)
+	{
+		return false;
+	}
+	LNetWorkConfigFileProcessor nwcfp;
+	if (!nwcfp.ReadConfig(pConfigFile, pSectionHeader))
+	{
+		return false;
+	}
+	m_pNetWorkServices = new LNetWorkServices;
+	if (m_pNetWorkServices == NULL)
+	{
+		return false;
+	}
+	if (!m_pNetWorkServices->Initialize(nwcfp.GetNetWorkServicesParams(), bInitializeAccept))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+bool LServerBaseNetWork::NetWorkStart()
+{
+	if (m_pNetWorkServices == NULL)
+	{
+		return false;
+	}
+	return m_pNetWorkServices->Start();
+}
+
+void LServerBaseNetWork::NetWorkDown()
+{
+	if (m_pNetWorkServices != NULL)
+	{
+		m_pNetWorkServices->Stop();
+		m_pNetWorkServices->ReleaseNetWorkServicesResource();
+		delete m_pNetWorkServices;
+	}
+}
+//	主线程循环中，需要调用这个函数，保证网络引擎提取和处理网络消息
+void LServerBaseNetWork::NetWorkServicesProcess(int nProcessNum)
+{
+	if (m_pNetWorkServices != NULL)
+	{
+		m_pNetWorkServices->ProcessRecvedPacket(nProcessNum);
+	}
+}
+
+bool LServerBaseNetWork::OnAddSession(uint64_t u64SessionID, char* pszRemoteIP, unsigned short usRemotePort, int nRecvThreadID, int nSendThreadID)
+{
+	return true;
+}
+void LServerBaseNetWork::OnRemoveSession(uint64_t u64SessionID)
+{
+	return ;
+}
+void LServerBaseNetWork::OnRecvedPacket(uint64_t u64SessionID, const char* pPacketData, unsigned int unPacketDataLen)
+{
+	return ;
+}
+
+bool LServerBaseNetWork::SendOnePacket(uint64_t u64SessionID, char* pData, unsigned int unDataLen)
+{
+	if (pData == NULL || unDataLen == 0 || u64SessionID == 0)
+	{
+		return false;
+	}
+	if (unDataLen + 2 >= 65535)
+	{
+		return false;
+	}
+	m_usTempDataLen = (unsigned short)unDataLen + sizeof(unsigned short);
+	if (m_unTempDataLen > MAX_TEMP_SEND_DATA_BUF_LEN)
+	{
+		return false;
+	}
+	memcpy(m_szTempSendData, &m_unTempDataLen, sizeof())
+	return m_pNetWorkServices->SendPacket(u64SessionID, pData, unDataLen);
+}
+
+
+void LServerBaseNetWork::KickOutOneSession(uint64_t u64SessionID)
+{
+	if (u64SessionID == 0)
+	{
+		return ;
+	}
+	m_pNetWorkServices->KickOutSession(u64SessionID);
+}
+
+void LServerBaseNetWork::GetListenIpAndPort(char* pBuf, unsigned int unBufSize, unsigned short& usPort)
+{
+	m_pNetWorkServices->GetListenIpAndPort(pBuf, unBufSize, usPort);
+}
+
+int LServerBaseNetWork::GetProcessedCount()
+{
+	return m_pNetWorkServices->GetProcessedCountThisRound();
+}
+

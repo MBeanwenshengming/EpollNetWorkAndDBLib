@@ -1,0 +1,29 @@
+/*
+ * ConnectorThread.cpp
+ *
+ *  Created on: 2015年10月27日
+ *      Author: wenshengming
+ */
+
+#include "ConnectorThread.h"
+
+ConnectorThread::ConnectorThread()
+{
+}
+
+ConnectorThread::~ConnectorThread()
+{
+}
+
+int ConnectorThread::ThreadDoing(void* pParam)
+{
+
+}
+bool ConnectorThread::OnStart()
+{
+
+}
+void ConnectorThread::OnStop()
+{
+
+}

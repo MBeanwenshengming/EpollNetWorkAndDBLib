@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<section name="Workbench">
+	<section name="completion_proposal_size">
+	</section>
+	<section name="PDOMSearchPage">
+		<item value="227191" key="searchFlags"/>
+		<item value="false" key="caseSensitive"/>
+		<list key="previousPatterns">
+			<item value="m_MutexProtectedForWillReuseManager"/>
+			<item value="AddFirstRecvOfSession"/>
+			<item value="memcpy"/>
+			<item value="movesession"/>
+			<item value="GetSockOpt"/>
+			<item value="GetSendBufIsFull"/>
+			<item value="m_nSendBufIsFull"/>
+			<item value="unRecvWorkItemCount"/>
+			<item value="SendDataInFixCircleSendBuf"/>
+			<item value="AddRecvedPacketToMainLogicFixLenCircleBuf"/>
+			<item value="m_listCurrentOnlineClient"/>
+			<item value="AppendDataToSend"/>
+			<item value="MoveWillCloseSessionToSessionPool"/>
+			<item value="epoll_ctl"/>
+			<item value="AddWillCloseSessionInMainLogic"/>
+		</list>
+	</section>
+	<section name="org.eclipse.cdt.internal.ui.wizards.classwizard.NewBaseClassSelectionDialogSettings">
+		<item value="true" key="show_structs"/>
+		<item value="true" key="show_lowlevel"/>
+		<item value="false" key="show_macros"/>
+		<item value="false" key="show_variables"/>
+		<item value="418" key="width"/>
+		<item value="false" key="show_functions"/>
+		<item value="false" key="show_enums"/>
+		<item value="646" key="height"/>
+		<item value="true" key="show_classes"/>
+		<item value="false" key="show_typedefs"/>
+		<item value="false" key="show_namespaces"/>
+		<item value="false" key="show_unions"/>
+		<item value="false" key="show_enumerators"/>
+		<item value="25" key="y"/>
+		<item value="633" key="x"/>
+	</section>
+	<section name="NewClassWizardPage">
+		<item value="true" key="stubSelected1"/>
+		<item value="false" key="namespaceSelected"/>
+		<item value="false" key="testFileSelected"/>
+		<item value="false" key="stubInline1"/>
+		<item value="true" key="stubVirtual1"/>
+		<item value="false" key="stubInline0"/>
+		<item value="" key="namespace"/>
+		<item value="true" key="stubSelected0"/>
+	</section>
+	<section name="org.eclipse.cdt.ui.OPEN_ACTION_SELECTION_DIALOG_SECTION">
+		<item value="448" key="DIALOG_WIDTH"/>
+		<item value="229" key="DIALOG_Y_ORIGIN"/>
+		<item value="411" key="DIALOG_HEIGHT"/>
+		<item value="618" key="DIALOG_X_ORIGIN"/>
+		<item value="1|Sans|10.0|0|GTK|1|" key="DIALOG_FONT_NAME"/>
+	</section>
+	<section name="org.eclipse.cdt.ui.text.hover.CMacroExpansionExploration">
+	</section>
+</section>

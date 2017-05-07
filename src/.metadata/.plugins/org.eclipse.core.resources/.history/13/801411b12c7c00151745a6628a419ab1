@@ -1,0 +1,241 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) <2010-2020> <wenshengming>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+*/
+
+#include "ConnectorThread.h"
+
+
+bool BuildRandomPacket(LPacketSingle* pPacket, bool bBroadCast, int& nPacketSendIndex)
+{
+	if (pPacket == NULL)
+	 {
+	  return false;
+	 }
+	 unsigned short usReserveBytes = 4 + 2 + 1 + 4;
+	 unsigned short usPacketBufLenAllBytes = pPacket->GetPacketBufLen();
+	 if (usPacketBufLenAllBytes < usReserveBytes)
+	 {
+	  return false;
+	 }
+	 // 留下4字节填写CRC32码和2字节包头，1字节数据包类型(单播0，广播1)，4字节的数据包顺序
+	 unsigned short usPacketRandomBufLen = pPacket->GetPacketBufLen() - usReserveBytes;
+	 if (usPacketRandomBufLen >= 8000)
+	 {
+	  return false;
+	 }
+
+	 unsigned short usPacketLenVar = usPacketRandomBufLen;
+	 char szPacketbuf[8000]; memset(szPacketbuf, 0, sizeof(szPacketbuf));
+	 int nLen = 0;
+	 while (usPacketLenVar--)
+	 {
+	  if (rand() % 2 == 0)
+	  {
+	   szPacketbuf[nLen] = 'a' + rand() % 26;
+	  }
+	  else
+	  {
+	   szPacketbuf[nLen] = 'A' + rand() % 26;
+	  }
+	  nLen++;
+	 }
+
+	 char cPacketType = bBroadCast ? 1 : 0;
+	 int npacketID = nPacketSendIndex;
+
+	 pPacket->AddChar(cPacketType);
+	 pPacket->AddInt(npacketID);
+	 pPacket->AddData(szPacketbuf, usPacketRandomBufLen);
+	 pPacket->MakeCRC32CodeToPacket();
+	 nPacketSendIndex++;
+
+	 pPacket->CheckCRC32Code();
+	 return true;
+}
+
+int main (int nargc, char* argv[])
+{
+	struct sigaction action;
+	memset(&action, 0, sizeof(action));
+	action.sa_handler = SIG_IGN;
+	action.sa_flags = 0;
+	sigemptyset(&action.sa_mask);
+	sigaction(SIGPIPE, &action, NULL);
+
+	memset(&action, 0, sizeof(action));
+	action.sa_handler = SIG_IGN;
+	action.sa_flags = 0;
+	sigemptyset(&action.sa_mask);
+	sigaction(SIGHUP, &action, NULL);
+
+	sigset_t sigset;
+	sigemptyset(&sigset);
+	sigaddset(&sigset, SIGPIPE);
+	int n = pthread_sigmask(SIG_BLOCK, &sigset, NULL);
+	if (n != 0)
+	{
+		return -1;
+	}
+
+	ConnectorThread m_ct;
+	m_ct.start();
+
+//	int nSocket = socket(AF_INET, SOCK_STREAM, 0);
+//	if (nSocket == -1)
+//	{
+//		return -1;
+//	}
+//	sockaddr_in sockaddr;
+//	memset(&sockaddr, 0, sizeof(sockaddr));
+//	sockaddr.sin_family = AF_INET;
+//	sockaddr.sin_port	= htons(12000);
+//	//	sockaddr.sin_addr.s_addr
+//	int nsucc = inet_aton("127.0.0.1", &sockaddr.sin_addr);
+//	if (nsucc == 0)
+//	{
+//		close(nSocket);
+//		return -2;
+//	}
+//	nsucc = connect(nSocket, (struct sockaddr*)&sockaddr, sizeof(sockaddr));
+//	if (nsucc != 0)
+//	{
+//		return -3;
+//	}
+//	time_t tLastPrintInfo = time(NULL);
+//
+//	char szRecvedBuf[128 * 1024]; memset(szRecvedBuf, 0, sizeof(szRecvedBuf));
+//	char szTempSendBuf[128 * 1024]; memset(szTempSendBuf, 0, sizeof(szTempSendBuf));
+//	unsigned int unRemainedDataLen = 0;
+//	bool bSendable = true;
+//	int nLastSendIndex = 1;
+//	int nLastRecvIndex = 0;
+//	int nPacketRecvedCount = 0;
+//	int nPacketSendCount = 0;
+//	int nBroadCastIndex = 0;
+//	while(1)
+//	{
+//		if (bSendable)
+//		{
+//			unsigned short usPacketLen = 11 + random() % 1000;
+//
+//			LPacketSingle packetToSend(usPacketLen);
+//			BuildRandomPacket(&packetToSend, false, nLastSendIndex);
+//
+//			unsigned short usSendDataAll = sizeof(unsigned short) + packetToSend.GetDataLen();
+//			memcpy(szTempSendBuf, &usSendDataAll, sizeof(unsigned short));
+//			memcpy(szTempSendBuf + sizeof(unsigned short), packetToSend.GetDataBuf(), packetToSend.GetDataLen());
+//
+//			int nSendResult = send(nSocket, szTempSendBuf, usSendDataAll, 0);
+//			if (nSendResult == -1)
+//			{
+//				printf("Send Failed, result code:%d, systemErrorcode:%d\n", nSendResult, errno);
+//				break;
+//			}
+//			bSendable = false;
+//			nPacketSendCount++;
+//		}
+//		int nRecvResult = recv(nSocket, szRecvedBuf + unRemainedDataLen, 128 * 1024 - unRemainedDataLen, 0);
+//		if (nRecvResult == -1)
+//		{
+//			printf("Recv Failed, result code:%d, systemErrorcode:%d\n", nRecvResult, errno);
+//			break;
+//		}
+//		unRemainedDataLen += nRecvResult;
+//		while (unRemainedDataLen > sizeof(unsigned short))
+//		{
+//			unsigned short usPacketLen = *((unsigned short*)szRecvedBuf);
+//			if (usPacketLen <= sizeof(unsigned short))
+//			{
+//				printf("recv error len\n");
+//				break;
+//			}
+//			if (usPacketLen > 8196)
+//			{
+//				printf("recv error len, Max\n");
+//				break;
+//			}
+//
+//			if (unRemainedDataLen >= usPacketLen)
+//			{
+//				LPacketSingle packetToRecved(20 * 1024);
+//				packetToRecved.DirectSetData(szRecvedBuf + sizeof(unsigned short), usPacketLen - sizeof(unsigned short));
+//
+//				if (!packetToRecved.CheckCRC32Code())
+//				{
+//					printf("Packet Receive CrC32Code Error\n");
+//				}
+//				char cPacketType = 0;
+//				packetToRecved.GetChar(cPacketType);
+//
+//
+//				packetToRecved.GetInt(nLastRecvIndex);
+//
+//
+//				if (cPacketType == 0)
+//				{
+//					if (nLastRecvIndex != nLastSendIndex - 1)
+//					{
+//						printf("RecvIndex:%d, LastSendIndex:%d\n", nLastRecvIndex, nLastSendIndex);
+//					}
+//					else
+//					{
+//						bSendable = true;
+//					}
+//				}
+//				else if (cPacketType == 1)
+//				{
+//					if (nBroadCastIndex == 0)
+//					{
+//						nBroadCastIndex = nLastRecvIndex;
+//					}
+//					if (nLastRecvIndex != nBroadCastIndex)
+//					{
+//						printf("LastBroadCastRecvIndex:%d, LastSendIndex:%d, BroadCastIndex:%d\n", nLastRecvIndex, nLastSendIndex, nBroadCastIndex);
+//					}
+//					nBroadCastIndex++;
+//				}
+//				else
+//				{
+//					printf("ErrorPacketType\n");
+//				}
+//
+//				unRemainedDataLen -= usPacketLen;
+//				memcpy(szRecvedBuf, szRecvedBuf + usPacketLen, unRemainedDataLen);
+//
+//				nPacketRecvedCount++;
+//			}
+//			else
+//			{
+//				break;
+//			}
+//		}
+//		time_t tNow = time(NULL);
+//		if (tNow - tLastPrintInfo > 1)
+//		{
+//			printf("SendCount:%d, RecvCount:%d\n", nPacketSendCount, nPacketRecvedCount);
+//			tLastPrintInfo = tNow;
+//		}
+//	}
+	return 0;
+}
+

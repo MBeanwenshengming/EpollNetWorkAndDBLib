@@ -1,0 +1,691 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) <2010-2020> <wenshengming>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+*/
+
+#include "LConnector.h"
+#include "./InfoRecorder/LInfoRecorderBase.h"
+#include "LIniFileReadAndWrite.h"
+
+LConnector::LConnector()
+{
+	memset(m_szRemoteIP, 0, sizeof(m_szRemoteIP));
+	m_usRemotePort 			= 0;
+	m_usReConnectTime 		= 0;	//	重新连接间隔时间,单位为秒
+	m_pszBufUseToRecvData 	= NULL;
+	m_unDataRemainInRecvBuf = 0;
+	m_pInfoRecorderBase		= NULL;
+	m_nConnected				= 0;
+	m_unBufUseToRecvDataLen	= 0;
+	m_unMaxPacketLen			= 0;
+	m_tLastConnnectTime		= 0;
+//	m_pEvents					= NULL;
+//	m_nEpollThreadHandle		= -1;
+//	m_nMaxEvents				= 5;
+	m_bSendable					= true;
+	FD_ZERO(&m_RdSet);
+	FD_ZERO(&m_WrSet);
+}
+
+LConnector::~LConnector()
+{
+	if (m_pszBufUseToRecvData != NULL)
+	{
+		delete[] m_pszBufUseToRecvData;
+		m_pszBufUseToRecvData = NULL;
+	}
+//	if (m_pEvents != NULL)
+//	{
+//		delete[] m_pEvents;
+//		m_pEvents = NULL;
+//	}
+}
+
+//	szRemoteIP  需要连接的服务器的IP地址
+//	usPort		需要连接的服务器的端口号
+//	usReConnectTime 		  连接断开之后，重新连接的间隔时间
+//	unRecvedPacketsBufLen  接收的连接的数据包缓存长度
+//	unSendPacketBufLen	  发送队列的缓存的长度
+//	unBufUseToRecvData	  用来接收数据的临时缓存长度，还有没有接收完的部分数据的缓存
+bool LConnector::Initialize(char szRemoteIP[33], unsigned short usPort, unsigned short usReConnectTime,
+		unsigned int unRecvedPacketsBufLen, unsigned int unSendPacketBufLen, unsigned int unBufUseToRecvData, unsigned int unMaxPacketLen)
+{
+	strncpy(m_szRemoteIP, szRemoteIP, 32);
+	if (strlen(m_szRemoteIP) == 0)
+	{
+		InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::Initialize", __LINE__,
+				"strlen(m_szRemoteIP) == 0\n");
+		return false;
+	}
+	if (usPort == 0)
+	{
+		InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::Initialize", __LINE__,
+						"usPort == 0\n");
+		return false;
+	}
+	if (unMaxPacketLen == 0)
+	{
+		InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::Initialize", __LINE__,
+								"unMaxPacketLen == 0\n");
+		return false;
+	}
+	m_unMaxPacketLen = unMaxPacketLen;
+
+	m_usRemotePort = usPort;
+	if (usReConnectTime == 0)
+	{
+		m_usReConnectTime = 1;
+	}
+	else
+	{
+		m_usReConnectTime = usReConnectTime;
+	}
+	if (unRecvedPacketsBufLen == 0 || unSendPacketBufLen == 0 || unBufUseToRecvData == 0)
+	{
+		InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::Initialize", __LINE__,
+								"RecvedPacketsBufLen:%u, SendPacketBufLen:%u, BufUseToRecvData:%u\n", unRecvedPacketsBufLen, unSendPacketBufLen, unBufUseToRecvData);
+		return false;
+	}
+	if (!m_RecvedPackets.InitializeVarLenCircleBuf(unRecvedPacketsBufLen))
+	{
+		InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::Initialize", __LINE__,
+										"m_RecvedPackets.InitializeVarLenCircleBuf Failed, RecvedPacketsBufLen:%u\n", unRecvedPacketsBufLen);
+		return false;
+	}
+	if (!m_WillSendPackets.Initialize(1, unSendPacketBufLen))
+	{
+		InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::Initialize", __LINE__,
+												"m_WillSendPackets.Initialize Failed, SendPacketBufLen:%u\n", unSendPacketBufLen);
+		return false;
+	}
+	m_pszBufUseToRecvData = new char[unBufUseToRecvData];
+	if (m_pszBufUseToRecvData == NULL)
+	{
+		InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::Initialize", __LINE__,
+														"m_pszBufUseToRecvData == NULL, BufUseToRecvData:%u\n", unBufUseToRecvData);
+		return false;
+	}
+	m_unBufUseToRecvDataLen	= unBufUseToRecvData;
+	m_unDataRemainInRecvBuf = 0;
+//	m_nMaxEvents = 5;
+//	m_pEvents = new epoll_event[m_nMaxEvents];
+//	if (m_pEvents == NULL)
+//	{
+//		InfoRecorder(LOG_TYPE_INITIALIZE, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::Initialize", __LINE__,
+//				"m_pEvents == NULL, MaxEvents:%d\n", m_nMaxEvents);
+//		return false;
+//	}
+//
+//	m_nEpollThreadHandle = epoll_create(m_nMaxEvents);
+//	if (m_nEpollThreadHandle == -1)
+//	{
+//		InfoRecorder(LOG_TYPE_INITIALIZE, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::Initialize", __LINE__,
+//								"epoll_create Failed, SystemErrorCode:%d, WaitClientSizePerEpoll:%u\n", errno, m_nMaxEvents);
+//		return false;
+//	}
+
+
+	if (!ReConnect())
+	{
+		InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::Initialize", __LINE__,
+																"ReConnect Failed\n");
+	}
+
+
+
+	return true;
+}
+
+bool LConnector::ReConnect()
+{
+	if (time(NULL) - m_tLastConnnectTime < m_usReConnectTime)
+	{
+		return false;
+	}
+	m_tLastConnnectTime = time(NULL);
+	if (m_Socket.GetSocket() != -1)
+	{
+		close(m_Socket.GetSocket());
+	}
+
+	m_unDataRemainInRecvBuf = 0;
+	m_RecvedPackets.ClearContent();
+	m_WillSendPackets.ClearContent();
+
+	int nSocket = socket(AF_INET, SOCK_STREAM, 0);
+	if (nSocket == -1)
+	{
+		InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ReConnect", __LINE__,
+																"nSocket == -1\n");
+		return false;
+	}
+	sockaddr_in sockaddr;
+	memset(&sockaddr, 0, sizeof(sockaddr));
+	sockaddr.sin_family = AF_INET;
+	sockaddr.sin_port	= htons(m_usRemotePort);
+
+	int nsucc = inet_aton(m_szRemoteIP, &sockaddr.sin_addr);
+	if (nsucc == 0)
+	{
+		InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ReConnect", __LINE__,
+																		"inet_aton Failed, SystemErrorcode:%d\n", errno);
+		return false;
+	}
+
+	//	连接服务器
+	nsucc = connect(nSocket, (struct sockaddr*)&sockaddr, sizeof(sockaddr));
+	if (nsucc != 0)
+	{
+		InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ReConnect", __LINE__,
+																						"connect Failed, SystemErrorcode:%d, errorCode:%d\n", errno, nsucc);
+	}
+	else
+	{
+		m_Socket.SetSocket(nSocket);
+		if (!m_Socket.SetNonBlockSocket())
+		{
+			InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ReConnect", __LINE__,
+																					"m_Socket.SetNonBlockSocket Failed, SystemErrorcode:%d\n", errno);
+			return false;
+		}
+
+//		//	加入到Epoll上监听
+//		if (AddToEpollHandle(nSocket, true))
+//		{
+			__sync_lock_test_and_set(&m_nConnected, 1);
+			m_bSendable = true;
+//		}
+	}
+	return true;
+}
+bool LConnector::AddToEpollHandle(int nSocket, bool bFirstAdd)
+{
+//	struct epoll_event epollEvent;
+//	memset(&epollEvent, 0, sizeof(epollEvent));
+//
+//	if (!m_bSendable)
+//	{
+//		epollEvent.events = EPOLLIN | EPOLLOUT | EPOLLONESHOT;
+//	}
+//	else
+//	{
+//		epollEvent.events = EPOLLIN | EPOLLONESHOT;
+//	}
+//
+//	if (bFirstAdd)
+//	{
+//		int nBindEpollSuccess = epoll_ctl(m_nEpollThreadHandle, EPOLL_CTL_ADD, nSocket, &epollEvent);
+//		if (nBindEpollSuccess == -1)
+//		{
+//			InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 0, __FILE__, "LConnector::AddToEpollHandle", __LINE__,
+//																															"epoll_ctl Failed, SystemError:%d\n", errno);
+//			return false;
+//		}
+//	}
+//	else
+//	{
+//		int nBindEpollSuccess = epoll_ctl(m_nEpollThreadHandle, EPOLL_CTL_MOD, nSocket, &epollEvent);
+//		if (nBindEpollSuccess == -1)
+//		{
+//			InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 0, __FILE__, "LConnector::AddToEpollHandle", __LINE__,
+//																															"epoll_ctl Failed, SystemError:%d\n", errno);
+//			return false;
+//		}
+//	}
+	return true;
+}
+int LConnector::ThreadDoing(void* pParam)
+{
+	while (1)
+	{
+		if (m_nConnected == 0)		//	未连接上
+		{
+			if (!ReConnect())
+			{
+				struct timespec timeReq;
+				timeReq.tv_sec 	= 0;
+				timeReq.tv_nsec = 10;
+				nanosleep(&timeReq, NULL);
+				continue;
+			}
+		}
+
+//		select(m_Socket.GetSocket(), )
+//		int nEpollEventCount = epoll_wait(m_nEpollThreadHandle, m_pEvents, m_nMaxEvents, 0);
+//		if (nEpollEventCount < 0)
+//		{
+//			if (errno == 4)
+//			{
+//				continue;
+//			}
+//			InfoRecorder(LOG_TYPE_EPOLL_THREAD, LOG_LEVEL_FATAL, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ThreadDoing", __LINE__,
+//												"epoll_wait Failed, Thread Quit, ErrorCode:%d\n", errno);
+//			return -1;
+//		}
+//		for (int nIndex = 0; nIndex < nEpollEventCount; ++nIndex)
+//		{
+//			//	接收数据
+//			if (m_pEvents[nIndex].events & EPOLLIN)
+//			{
+//				int nRecvResult = m_Socket.Recv(m_pszBufUseToRecvData + m_unDataRemainInRecvBuf, m_unBufUseToRecvDataLen - m_unDataRemainInRecvBuf);
+//				if (nRecvResult <= 0)
+//				{
+//					if (nRecvResult != E_Socket_No_Recv_Data)
+//					{
+//						InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ThreadDoing", __LINE__,
+//																												"m_Socket.Recv Failed, SystemErrorcode:%d, errorCode:%d, RecvBufLen:%u, RemainInRecvBuf:%u\n",
+//																												errno, nRecvResult, m_unBufUseToRecvDataLen, m_unDataRemainInRecvBuf);
+//						m_nConnected = 0;
+//						continue;
+//					}
+//				}
+//				else
+//				{
+//					m_unDataRemainInRecvBuf += nRecvResult;
+//					//	解析数据
+//					int nParseRecvedResult = ParseRecvedData();
+//					if (nParseRecvedResult < 0)
+//					{
+//						InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ThreadDoing", __LINE__,
+//									"ParseRecvedData Failed, SystemErrorcode:%d, errorCode:%d, RecvBufLen:%u, RemainInRecvBuf:%u, ParseResult:%d\n",
+//									errno, nRecvResult, m_unBufUseToRecvDataLen, m_unDataRemainInRecvBuf, nParseRecvedResult);
+//						m_nConnected = 0;
+//						continue;
+//					}
+//				}
+//			}
+//			if (m_pEvents[nIndex].events & EPOLLOUT)
+//			{
+//				m_bSendable = true;
+//			}
+//		}
+
+		FD_ZERO(&m_RdSet);
+		FD_ZERO(&m_WrSet);
+
+		FD_SET(m_Socket.GetSocket(), &m_RdSet);
+		if (!m_bSendable)
+		{
+			FD_SET(m_Socket.GetSocket(), &m_WrSet);
+		}
+		struct timeval tv;
+		tv.tv_sec = 0;
+		tv.tv_usec = 1;
+
+		int nSelectResult = select(m_Socket.GetSocket() + 1, &m_RdSet, &m_WrSet, NULL, &tv);
+
+		int nSendedCountThisRound = 0;
+		if (m_bSendable)
+		{
+			//	发送数据
+			int nCurrentExistCount = m_WillSendPackets.GetCurrentExistCount();
+			if (nCurrentExistCount > 0)
+			{
+				nSendedCountThisRound = SendPackets();
+				if (nSendedCountThisRound < 0)
+				{
+					InfoRecorder(LOG_TYPE_CONNECTOR, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ThreadDoing", __LINE__,
+																															"SendPackets Failed, SystemErrorcode:%d, errorCode:%d\n", errno, nSendedCountThisRound);
+					m_nConnected = 0;
+					continue;
+				}
+			}
+		}
+		if (nEpollEventCount == 0 && nSendedCountThisRound == 0)
+		{
+			struct timespec timeReq;
+			timeReq.tv_sec 	= 0;
+			timeReq.tv_nsec = 10;
+			nanosleep(&timeReq, NULL);
+		}
+		//	重新加入监听
+		AddToEpollHandle(m_Socket.GetSocket(), false);
+	}
+	return 0;
+}
+
+int LConnector::ParseRecvedData()
+{
+	if (m_unDataRemainInRecvBuf == 0)
+	{
+		return 0;
+	}
+
+	unsigned int unDataRecvedCount = 0;
+
+	unsigned short usPacketLen = *((unsigned short*)m_pszBufUseToRecvData);
+	if (usPacketLen > m_unMaxPacketLen)
+	{
+		InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ParseRecvedData", __LINE__,
+																	"1 usPacketLen > m_unMaxPacketLen, RecvedPacketLen:%hu, MaxPacketLen:%u, DataRemainInRecvBuf:%u\n",
+																	usPacketLen, m_unMaxPacketLen, m_unDataRemainInRecvBuf);
+		return -1;
+	}
+	if (usPacketLen < sizeof(unsigned short))
+	{
+		InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ParseRecvedData", __LINE__,
+																	"1 usPacketLen < sizeof(unsigned short), PacketSize:%hu, DataRemainInRecvBuf:%u\n",
+																	usPacketLen, m_unDataRemainInRecvBuf);
+
+		return -2;
+	}
+	while (m_unDataRemainInRecvBuf >= usPacketLen)	//	判断是否有一个完整的数据包
+	{
+		E_Circle_Error eErrorCode = m_RecvedPackets.AddData(m_pszBufUseToRecvData + sizeof(unsigned short), usPacketLen - sizeof(unsigned short));
+		if (eErrorCode != E_Circle_Buf_No_Error)
+		{
+			InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_FATAL, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ParseRecvedData", __LINE__,
+																								"m_RecvedPackets.AddData Failed, ErrorCode:%d\n",
+																								eErrorCode);
+
+			return -3;
+		}
+		//	改变长度
+		unDataRecvedCount += usPacketLen;
+		memcpy(m_pszBufUseToRecvData, m_pszBufUseToRecvData + usPacketLen, m_unDataRemainInRecvBuf - usPacketLen);
+		m_unDataRemainInRecvBuf -= usPacketLen;
+		if (m_unDataRemainInRecvBuf >= sizeof(unsigned short))	//	判断是否还有数据包
+		{
+			usPacketLen = *((unsigned short*)m_pszBufUseToRecvData);
+			//	这里需要判断接收数据包的长度，如果长度非法，那么，关闭连接
+			if (usPacketLen > m_unMaxPacketLen)
+			{
+				InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ParseRecvedData", __LINE__,
+																					"2 usPacketLen > m_unMaxPacketLen, RecvedPacketLen:%hu, MaxPacketLen:%u, DataRemainInRecvBuf:%u\n",
+																					usPacketLen, m_unMaxPacketLen, m_unDataRemainInRecvBuf);
+				return -4;
+			}
+			if (usPacketLen < sizeof(unsigned short))
+			{
+				InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::ParseRecvedData", __LINE__,
+																					"2 usPacketLen < sizeof(unsigned short), PacketSize:%hu, DataRemainInRecvBuf:%u\n",
+																					usPacketLen, m_unDataRemainInRecvBuf);
+				return -5;
+			}
+		}
+		else	//	没有超过包头的数据存在，跳出循环
+		{
+			break;
+		}
+	}
+	return unDataRecvedCount;
+}
+
+int LConnector::SendPackets()
+{
+	int nReadIndex = 0;
+	int nWriteIndex = 0;
+	m_WillSendPackets.GetCurrentReadAndWriteIndex(nReadIndex, nWriteIndex);
+	if (nReadIndex == nWriteIndex)
+	{
+		return 0;
+	}
+	char* pBufStart = m_WillSendPackets.GetBuf();
+
+	if (nReadIndex < nWriteIndex)
+	{
+		int nResult = m_Socket.Send(pBufStart + nReadIndex, nWriteIndex - nReadIndex);
+		if (nResult > 0)
+		{
+			//	全部发送成功，那么将数据读索引设置成写索引，表示数据已经读取
+			m_WillSendPackets.SetReadIndex(nWriteIndex);
+			return nResult;
+		}
+		else		//	发送不成功，检查发送返回值
+		{
+			if (E_Socket_Send_System_Buf_Full == nResult)
+			{
+				m_bSendable = false;
+				return 0;
+			}
+			else
+			{
+				return -1;
+			}
+		}
+	}
+	else
+	{
+		//	先发送到缓冲结尾的地方，然后发送从头开始的地方
+		//	第一步，发送到结尾的数据
+		int nSendCount = 0;
+
+		int nResult = m_Socket.Send(pBufStart + nReadIndex, m_WillSendPackets.GetMaxItemCount() - nReadIndex);
+		if (nResult > 0)
+		{
+			m_WillSendPackets.SetReadIndex(0);
+			nSendCount += nResult;
+		}
+		else
+		{
+			if (E_Socket_Send_System_Buf_Full == nResult)
+			{
+				m_bSendable = false;
+				return 0;
+			}
+			else
+			{
+				return -2;
+			}
+		}
+		if (nWriteIndex == 0)	//	说明没有数据
+		{
+			m_WillSendPackets.SetReadIndex(nWriteIndex);
+			return nSendCount;
+		}
+		//	第二步， 发送到写位置的数据
+		nResult = m_Socket.Send(pBufStart, nWriteIndex);
+		if (nResult > 0)
+		{
+			m_WillSendPackets.SetReadIndex(nWriteIndex);
+			nSendCount += nResult;
+			return nSendCount;
+		}
+		else
+		{
+			if (E_Socket_Send_System_Buf_Full == nResult)
+			{
+				m_bSendable = false;
+				return 0;
+			}
+			else
+			{
+				return -3;
+			}
+		}
+	}
+}
+bool LConnector::OnStart()
+{
+	return true;
+}
+void LConnector::OnStop()
+{
+
+}
+
+//	获取一个接收到的数据包, 主逻辑线程调用
+bool LConnector::GetOneRecvedPacket(char* pBufToGetData, unsigned int unBufLen, unsigned int& unGettedDataLen)
+{
+	E_Circle_Error eErrorCode = m_RecvedPackets.GetData(pBufToGetData, unBufLen, unGettedDataLen);
+	if (eErrorCode == E_Circle_Buf_No_Error)
+	{
+		return true;
+	}
+	else
+	{
+		if (eErrorCode != E_Circle_Buf_Is_Empty)
+		{
+			InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_FATAL, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::GetOneRecvedPacket", __LINE__,
+																											"m_RecvedPackets.GetData Failed, ErrorCode:%d\n",
+																											eErrorCode);
+		}
+		return false;
+	}
+}
+//	发送一个数据包, 主逻辑线程调用
+bool LConnector::SendOnePacket(char* pDataToSend, unsigned int unDataLen)
+{
+	E_Circle_Error eErrorCode = m_WillSendPackets.AddDataToFixCirclebufForItemSizeOneByte(pDataToSend, unDataLen);
+	if (eErrorCode != E_Circle_Buf_No_Error)
+	{
+		InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_FATAL, LOG_SUBTYPE_LOGIC, 1, __FILE__, "LConnector::SendOnePacket", __LINE__,
+																													"m_WillSendPackets.AddDataToFixCirclebufForItemSizeOneByte Failed, ErrorCode:%d\n",
+																													eErrorCode);
+		return false;
+	}
+	return true;
+}
+bool LConnector::IsConnectted()
+{
+	return m_nConnected == 1 ? true : false;
+}
+
+void LConnector::SetLogTypeAndLevel(unsigned int unLogType, unsigned int unLevel)
+{
+	if (m_pInfoRecorderBase == NULL)
+	{
+		return ;
+	}
+	m_pInfoRecorderBase->SetLogType(unLogType);
+	m_pInfoRecorderBase->SetLogLevel(unLevel);
+}
+void LConnector::GetLogTypeAndLevel(unsigned int& unLogType, unsigned int& unLevel)
+{
+	if (m_pInfoRecorderBase == NULL)
+	{
+		return ;
+	}
+	unLogType	= m_pInfoRecorderBase->GetLogType();
+	unLevel		= m_pInfoRecorderBase->GetLogLevel();
+}
+
+void LConnector::SetInfoRecorderBase(LInfoRecorderBase* pInfoRecorderBase)
+{
+	m_pInfoRecorderBase = pInfoRecorderBase;
+}
+void LConnector::InfoRecorder(unsigned int unLogType, unsigned int unLevel, unsigned int unLogSubType, unsigned int unThreadID, const char* pszFileName, const char* pszFunctionName, int nLine, const char* pszFmt, ...)
+{
+	if (m_pInfoRecorderBase == NULL)
+	{
+		return ;
+	}
+	va_list ap;
+	va_start(ap, pszFmt);
+	m_pInfoRecorderBase->InfoRecorder(unLogType, unLevel, unLogSubType, unThreadID, pszFileName, pszFunctionName, nLine, pszFmt, ap);
+	va_end(ap);
+}
+
+
+
+LConnectorConfigProcessor::LConnectorConfigProcessor()
+{
+	memset(&m_Cip, 0, sizeof(m_Cip));
+	m_Cip.unReConnectPeriodTime = 10;
+}
+
+LConnectorConfigProcessor::~LConnectorConfigProcessor()
+{
+}
+
+bool LConnectorConfigProcessor::Initialize(char* pConfigFileName, char* pSectionHeader, bool bReadIpAndPort)
+{
+	if (pConfigFileName == NULL || pSectionHeader == NULL || strlen(pSectionHeader) >= 64)
+	{
+		return false;
+	}
+	LIniFileReadAndWrite ifraw;
+	if (!ifraw.OpenIniFile(pConfigFileName))
+	{
+		return false;
+	}
+
+	//	读取连接IP和端口
+	char szSection[128 + 1];
+	memset(szSection, 0, sizeof(szSection));
+	sprintf(szSection, "%s_Connector_Global", pSectionHeader);
+	char* pSection = szSection;
+	const char* pKey = NULL;
+
+	if (bReadIpAndPort)
+	{
+		pKey = "IP";
+		if (!ifraw.read_profile_string(pSection, pKey, m_Cip.szIP, sizeof(m_Cip.szIP) - 1, ""))
+		{
+			return false;
+		}
+
+		pKey = "PORT";
+		int nPort = ifraw.read_profile_int(pSection, pKey, 0);
+		if (nPort <= 0)
+		{
+			return false;
+		}
+		m_Cip.usPort = nPort;
+	}
+
+	pKey = "ReConnectPeriodTime";		//断开后的重连时间
+	int nReConnectPeriodTime = ifraw.read_profile_int(pSection, pKey, 0);
+	if (nReConnectPeriodTime <= 0)
+	{
+		return false;
+	}
+	m_Cip.unReConnectPeriodTime = nReConnectPeriodTime;
+
+	pKey = "MaxPacketLen";		//	最大数据包
+	int nMaxPacketLen = ifraw.read_profile_int(pSection, pKey, 0);
+	if (nMaxPacketLen <= 0)
+	{
+		return false;
+	}
+	m_Cip.unMaxPacketLen = nMaxPacketLen;
+
+	pKey = "PacketRecvBufLen";		//	最大数据包
+	int nPacketRecvBufLen = ifraw.read_profile_int(pSection, pKey, 0);
+	if (nPacketRecvBufLen <= 0)
+	{
+		return false;
+	}
+	m_Cip.unMaxRecvBufLen = nPacketRecvBufLen;
+
+	pKey = "PacketRecvedPacketBufLen";		//	所有的接收的数据包的缓存长度
+	int nPacketRecvedPacketBufLen = ifraw.read_profile_int(pSection, pKey, 0);
+	if (nPacketRecvedPacketBufLen <= 0)
+	{
+		return false;
+	}
+	m_Cip.unRecvedPacketBufLen = nPacketRecvedPacketBufLen;
+
+	pKey = "SendPacketBufLen";		//	发送数据缓存长度
+	int nSendPacketBufLen = ifraw.read_profile_int(pSection, pKey, 0);
+	if (nSendPacketBufLen <= 0)
+	{
+		return false;
+	}
+	m_Cip.unMaxSendBufLen = nSendPacketBufLen;
+
+	return true;
+}
+t_Connector_Initialize_Params& LConnectorConfigProcessor::GetConnectorInitializeParams()
+{
+	return m_Cip;
+}

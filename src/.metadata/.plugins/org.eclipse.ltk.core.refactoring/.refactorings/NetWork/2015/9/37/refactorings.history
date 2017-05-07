@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">&#x0A;<refactoring comment="Rename resource &apos;NetWork/LInfoRecorder.h&apos; to &apos;LNetWorkInfoRecorder.h&apos;" description="Rename resource &apos;LInfoRecorder.h&apos;" flags="7" id="org.eclipse.ltk.core.refactoring.rename.resource" input="LInfoRecorder.h" name="LNetWorkInfoRecorder.h" stamp="1441689284860" updateReferences="true"/>&#x0A;<refactoring comment="Rename resource &apos;NetWork/LInfoRecorder.cpp&apos; to &apos;LNetWorkInfoRecorder.cpp&apos;" description="Rename resource &apos;LInfoRecorder.cpp&apos;" flags="7" id="org.eclipse.ltk.core.refactoring.rename.resource" input="LInfoRecorder.cpp" name="LNetWorkInfoRecorder.cpp" stamp="1441689303343" updateReferences="true"/>
+</session>

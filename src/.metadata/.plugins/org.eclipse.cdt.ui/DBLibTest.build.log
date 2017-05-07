@@ -1,0 +1,7 @@
+14:18:27 **** Clean-only build of configuration Debug for project DBLibTest ****
+make clean 
+rm -rf  ./main.o  ./main.d  DBLibTest_Debug
+ 
+
+14:18:27 Build Finished (took 105ms)
+

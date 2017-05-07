@@ -1,0 +1,47 @@
+04:51:58 **** Build of configuration Debug for project singleserver ****
+make all 
+Building file: ../LMainLogicBroadCast.cpp
+Invoking: GCC C++ Compiler
+g++ -I/home/wenshengming/work/EpollNetWork/NetWork -I"/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine" -O0 -g3 -Wall -c -fmessage-length=0 -MMD -MP -MF"LMainLogicBroadCast.d" -MT"LMainLogicBroadCast.d" -o "LMainLogicBroadCast.o" "../LMainLogicBroadCast.cpp"
+In file included from /home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/mixTest.h:5,
+                 from ../LMainLogicBroadCast.cpp:30:
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h: In member function ‘int packetdefine::OrginTypeArrayFixLenStruct::Serialize(char*, unsigned int)’:
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h:365: 警告：未使用的变量‘unCurrentDataLen’
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h: In member function ‘int packetdefine::OrginTypeArrayFixLenStruct::UnSerialize(char*, unsigned int)’:
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h:455: 警告：未使用的变量‘unCurrentDataLen’
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h: In member function ‘int packetdefine::UserDefinedTypeStruct::Serialize(char*, unsigned int)’:
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h:1252: 警告：未使用的变量‘unCurrentDataLen’
+In file included from /home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/mixTest.h:5,
+                 from ../LMainLogicBroadCast.cpp:30:
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h: In member function ‘int packetdefine::UserDefinedTypeStruct::UnSerialize(char*, unsigned int)’:
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h:1296: 警告：未使用的变量‘unCurrentDataLen’
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h: In member function ‘int packetdefine::userDefinedTypeFixLenStruct::Serialize(char*, unsigned int)’:
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h:1382: 警告：未使用的变量‘unCurrentDataLen’
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h: In member function ‘int packetdefine::userDefinedTypeFixLenStruct::UnSerialize(char*, unsigned int)’:
+/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine/OrignFile.h:1435: 警告：未使用的变量‘unCurrentDataLen’
+../LMainLogicBroadCast.cpp: In member function ‘bool LMainLogicBroadCast::Initialize(char*)’:
+../LMainLogicBroadCast.cpp:54: 警告：不建议使用从字符串常量到‘char*’的转换
+Finished building: ../LMainLogicBroadCast.cpp
+ 
+Building file: ../LMainTest.cpp
+Invoking: GCC C++ Compiler
+g++ -I/home/wenshengming/work/EpollNetWork/NetWork -I"/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine" -O0 -g3 -Wall -c -fmessage-length=0 -MMD -MP -MF"LMainTest.d" -MT"LMainTest.d" -o "LMainTest.o" "../LMainTest.cpp"
+../LMainTest.cpp: In function ‘int main(int, char**)’:
+../LMainTest.cpp:88: 警告：不建议使用从字符串常量到‘char*’的转换
+../LMainTest.cpp:91: 警告：不建议使用从字符串常量到‘char*’的转换
+../LMainTest.cpp:88: 警告：未使用的变量‘pFileName’
+Finished building: ../LMainTest.cpp
+ 
+Building file: ../LMyErrorRecorder.cpp
+Invoking: GCC C++ Compiler
+g++ -I/home/wenshengming/work/EpollNetWork/NetWork -I"/home/wenshengming/work/EpollNetWork/singleserver/singleserver/packetdefine" -O0 -g3 -Wall -c -fmessage-length=0 -MMD -MP -MF"LMyErrorRecorder.d" -MT"LMyErrorRecorder.d" -o "LMyErrorRecorder.o" "../LMyErrorRecorder.cpp"
+Finished building: ../LMyErrorRecorder.cpp
+ 
+Building target: singleserver
+Invoking: GCC C++ Linker
+g++ -L/home/wenshengming/work/EpollNetWork/NetWork/Debug -o "singleserver"  ./LMainLogicBroadCast.o ./LMainTest.o ./LMyErrorRecorder.o   -lpthread -lNetWork_Debug
+Finished building target: singleserver
+ 
+04:52:06 **** Incremental Build of configuration Debug for project singleserver ****
+make all 
+make: Nothing to be done for `all'.

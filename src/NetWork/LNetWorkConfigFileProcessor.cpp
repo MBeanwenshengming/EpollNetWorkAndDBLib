@@ -1,0 +1,239 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) <2010-2020> <wenshengming>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+*/
+
+#include "LNetWorkConfigFileProcessor.h"
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <ctype.h>
+
+LNetWorkConfigFileProcessor::LNetWorkConfigFileProcessor(void)
+{	
+	memset(m_szSectionHeader, 0, sizeof(m_szSectionHeader));
+
+	memset(&m_NetWorkServicesParams, 0, sizeof(m_NetWorkServicesParams));
+
+	memset(m_szIp, 0, sizeof(m_szIp));
+}
+
+LNetWorkConfigFileProcessor::~LNetWorkConfigFileProcessor(void)
+{
+}
+
+bool LNetWorkConfigFileProcessor::ReadConfig(char* pFileName, char* pSectionHeader)
+{
+	if (pFileName == NULL || pSectionHeader == NULL)
+	{
+		return false;
+	}
+	if (strlen(pSectionHeader) >= 64)
+	{
+		return false;
+	}
+
+	strncpy(m_szSectionHeader, pSectionHeader, sizeof(m_szSectionHeader) - 1);
+
+	if (!m_Inifile.OpenIniFile(pFileName))
+	{
+		return false;
+	}
+
+	if (!ReadServicesGlobalParam())
+	{
+		return false;
+	}
+
+	if (!ReadServicesBase())
+	{
+		return false;
+	}
+	if (!ReadServicesSession())
+	{
+		return false;
+	}
+	return true;
+}
+
+bool LNetWorkConfigFileProcessor::ReadServicesBase()
+{
+	char szSection[128 + 1];
+	memset(szSection, 0, sizeof(szSection));
+
+	sprintf(szSection, "%s_NetWork_Base", m_szSectionHeader);
+
+	char* pSection = szSection;
+	
+	
+	const char* pKey = "IP";
+	if (!m_Inifile.read_profile_string(pSection, pKey, m_szIp, sizeof(m_szIp) - 1, ""))
+	{
+		return false;
+	}	
+	if (strlen(m_szIp) == 0)
+	{
+		return false;
+	}
+	pKey = "PORT";
+	int nPort = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nPort <= 0)
+	{
+		return false;
+	}
+	pKey = "LISTENLISTSIZE";
+	int nListenListSize = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nListenListSize <= 0)
+	{
+		return false;
+	}
+	m_NetWorkServicesParams.nwspBase.pListenIP			= m_szIp;
+	m_NetWorkServicesParams.nwspBase.usListenPort		= nPort;
+	m_NetWorkServicesParams.nwspBase.unListenListSize	= nListenListSize;
+	return true;
+}
+
+bool LNetWorkConfigFileProcessor::ReadServicesSession()
+{
+
+	char szSection[128 + 1];
+	memset(szSection, 0, sizeof(szSection));
+
+	sprintf(szSection, "%s_NetWork_Session", m_szSectionHeader);
+
+	char* pSection = szSection;
+
+	const char* pKey = "MaxSessionNum";
+	int nMaxSessionNum = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nMaxSessionNum <= 0)
+	{
+		return false;
+	}
+
+	pKey = "KickOutIdleSessionTime";
+	int nKickOutIdleSessionTime = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nKickOutIdleSessionTime <= 0)
+	{
+		return false;
+	}
+	if (nKickOutIdleSessionTime > 0xffff)
+	{
+		nKickOutIdleSessionTime = 0xffff - 1;
+	}
+
+	pKey = "MaxPacketLen";
+	int nMaxPacketLen = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nMaxSessionNum <= 0)
+	{
+		return false;
+	}
+
+	pKey = "MaxSendBufLen";
+	int nMaxSendBufLen = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nMaxSessionNum <= 0)
+	{
+		return false;
+	}
+
+	m_NetWorkServicesParams.nwspSession.unMaxSessionNum		= (unsigned int)nMaxSessionNum;
+	m_NetWorkServicesParams.nwspSession.usKickOutSessionTime = (unsigned short)nKickOutIdleSessionTime;
+	m_NetWorkServicesParams.nwspSession.unMaxPacketLen			= (unsigned int)nMaxPacketLen;
+	m_NetWorkServicesParams.nwspSession.unSendBufLen			= (unsigned int)nMaxSendBufLen;
+	m_NetWorkServicesParams.nwspSession.unCloseWorkItemCount = m_NetWorkServicesParams.nwspSession.unMaxSessionNum  + 100;
+
+	m_NetWorkServicesParams.nwspRecvThread.unRecvWorkItemCount = m_NetWorkServicesParams.nwspSession.unMaxSessionNum / m_NetWorkServicesParams.nwspRecvThread.usThreadCount + 100;
+
+	//	发送的大小使用总连接数/发送线程数乘以100，因为有广播，所以要乘上100
+	m_NetWorkServicesParams.nwspSendThread.unSendWorkItemCount 		= (m_NetWorkServicesParams.nwspSession.unMaxSessionNum / m_NetWorkServicesParams.nwspSendThread.unSendThreadCount + 100) * 100;
+	m_NetWorkServicesParams.nwspSendThread.unEpollOutEventMaxCount = m_NetWorkServicesParams.nwspSession.unMaxSessionNum / m_NetWorkServicesParams.nwspSendThread.unSendThreadCount + 100;
+
+	m_NetWorkServicesParams.nwspEpollThread.unWaitClientSizePerEpoll	= m_NetWorkServicesParams.nwspSession.unMaxSessionNum / m_NetWorkServicesParams.nwspEpollThread.unEpollThreadCount + 100;
+
+	//	可能多个线程会提交关闭请求，所以要乘以连接数的3倍
+	m_NetWorkServicesParams.nwspCloseThread.unCloseWorkItemCount 		= m_NetWorkServicesParams.nwspSession.unMaxSessionNum + 100;
+	return true;
+
+}
+
+bool LNetWorkConfigFileProcessor::ReadServicesGlobalParam()
+{
+	char szSection[128 + 1];
+	memset(szSection, 0, sizeof(szSection));
+
+	sprintf(szSection, "%s_NetWork_Global", m_szSectionHeader);
+
+	char* pSection = szSection;
+
+	const char* pKey = "SendThreadCount";
+	int nSendThreadCount = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nSendThreadCount <= 0)
+	{
+		return false;
+	}
+	pKey = "RecvThreadCount";
+	int nRecvThreadCount = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nRecvThreadCount <= 0)
+	{
+		return false;
+	}
+	pKey = "EpollThreadCount";
+	int nEpollThreadCount = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nEpollThreadCount <= 0)
+	{
+		return false;
+	}
+
+
+	pKey = "AcceptRecvedPacketPoolLen";
+	int nAcceptRecvedPacketPoolLen = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nAcceptRecvedPacketPoolLen <= 0)
+	{
+		return false;
+	}
+	pKey = "RecvThreadPacketPoolLen";
+	int nRecvThreadPacketPoolLen = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nRecvThreadPacketPoolLen <= 0)
+	{
+		return false;
+	}
+	pKey = "CloseThreadPacketPoolLen";
+	int nCloseThreadPacketPoolLen = m_Inifile.read_profile_int(pSection, pKey, 0);
+	if (nCloseThreadPacketPoolLen <= 0)
+	{
+		return false;
+	}
+
+	m_NetWorkServicesParams.nwspEpollThread.unEpollThreadCount		= nEpollThreadCount;
+	m_NetWorkServicesParams.nwspRecvThread.usThreadCount				= nRecvThreadCount;
+	m_NetWorkServicesParams.nwspSendThread.unSendThreadCount			= nSendThreadCount;
+
+	m_NetWorkServicesParams.nwspBase.unAcceptThreadToMainThreadRecvedPacketPoolLen 			= nAcceptRecvedPacketPoolLen;
+	m_NetWorkServicesParams.nwspRecvThread.unRecvThreadToMainThreadRecvedPacketPoolLen 		= nRecvThreadPacketPoolLen;
+	m_NetWorkServicesParams.nwspCloseThread.unCloseThreadToMainThreadRecvedPacketPoolLen 	= nCloseThreadPacketPoolLen;
+
+	return true;
+}
+
+
+
+

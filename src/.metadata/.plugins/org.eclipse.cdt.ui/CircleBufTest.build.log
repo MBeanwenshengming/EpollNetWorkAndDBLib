@@ -1,0 +1,7 @@
+16:05:35 **** Clean-only build of configuration Debug for project CircleBufTest ****
+make clean 
+rm -rf  ./LMainTest.o  ./LMainTest.d  CircleBufTest
+ 
+
+16:05:35 Build Finished (took 284ms)
+

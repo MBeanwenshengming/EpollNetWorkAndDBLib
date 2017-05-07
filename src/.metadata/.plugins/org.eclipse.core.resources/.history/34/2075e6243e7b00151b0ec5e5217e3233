@@ -1,0 +1,556 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) <2010-2020> <wenshengming>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+*/
+
+#include "LSession.h"
+#include "LRecvThread.h"
+#include "LNetWorkServices.h"
+#include "LEpollThreadManager.h"
+#include "LRecvThreadManager.h"
+#include "LEpollThread.h"
+#include "LCloseSocketThread.h" 
+#include "LSendThread.h"
+
+
+extern bool g_bEpollETEnabled;
+
+extern int errno;
+
+
+
+LSession::LSession()
+{
+	__sync_lock_test_and_set(&m_nSendBufIsFull, 0);
+	m_pszRecvedContent	= NULL;
+	m_unMaxPacketLen		= 0;
+	m_unRecvBufLen			= 0;
+	Reset();
+}
+
+LSession::~LSession()
+{
+	if (m_pszRecvedContent != NULL)
+	{
+		delete[] m_pszRecvedContent;
+		m_pszRecvedContent = NULL;
+	}
+}
+
+//	初始化接收和发送缓存大小
+bool LSession::InitializeRecvAndSendBuf(unsigned int unSessionRecvBufLen, unsigned int unSessionSendBufferLen)
+{
+	if (unSessionRecvBufLen == 0 || unSessionSendBufferLen == 0)
+	{
+		return false;
+	}
+	if (!m_FixLenCircleBufForSendData.Initialize(1, unSessionSendBufferLen))
+	{
+		return false;
+	}
+	m_unMaxPacketLen 	= unSessionRecvBufLen;
+	m_unRecvBufLen		= m_unMaxPacketLen + sizeof(int);
+
+	m_pszRecvedContent = new char[m_unRecvBufLen];
+	if (m_pszRecvedContent == NULL)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+//	client ID sessionManager分配
+void LSession::SetSessionID(uint64_t u64SessionID)
+{
+	m_u64SessionID = u64SessionID;
+}
+uint64_t LSession::GetSessionID()
+{
+	return m_u64SessionID;
+}
+
+
+void LSession::SetRecvThreadID(int nRecvThreadID)
+{
+	__sync_lock_test_and_set(&m_nRecvThreadID, nRecvThreadID);
+}
+int LSession::GetRecvThreadID()
+{
+	return m_nRecvThreadID;
+}
+
+
+void LSession::SetSendThreadID(int nSendThreadID)
+{
+	__sync_lock_test_and_set(&m_nSendThreadID, nSendThreadID);
+}
+int LSession::GetSendThreadID()
+{
+	return m_nSendThreadID;
+}
+
+void LSession::SetEpollThreadID(int nEpollThreadID)
+{
+	__sync_lock_test_and_set(&m_nEpollThreadID, nEpollThreadID);
+}
+int LSession::GetEpollThreadID()
+{
+	return m_nEpollThreadID;
+}
+
+
+void LSession::GetStopProcessInfos(int& nSendThreadStopProcessInfo, int& nRecvThreadStopProcessInfo,
+		int& nMainLogicThreadStopProcessInfo, int& nEpollThreadSopProcessInfo)
+{
+	nSendThreadStopProcessInfo 		= m_nSendThreadStopProcessSession;
+	nRecvThreadStopProcessInfo 		= m_nRecvThreadStopProcessSession;
+	nMainLogicThreadStopProcessInfo 	= m_nMainLogicThreadStopProcessSession;
+	nEpollThreadSopProcessInfo 		= m_nEpollThreadStopProcessSession;
+}
+void LSession::SetSendThreadStopProcess(int nStop)
+{
+	__sync_lock_test_and_set(&m_nSendThreadStopProcessSession, nStop);
+}
+int LSession::GetSendThreadStopProcess()
+{
+	return m_nSendThreadStopProcessSession;
+}
+void LSession::SetRecvThreadStopProcess(int nStop)
+{
+	__sync_lock_test_and_set(&m_nRecvThreadStopProcessSession, nStop);
+}
+int LSession::GetRecvThreadStopProcess()
+{
+	return m_nRecvThreadStopProcessSession;
+}
+void LSession::SetMainLogicThreadStopProcess(int nStop)
+{
+	__sync_lock_test_and_set(&m_nMainLogicThreadStopProcessSession, nStop);
+}
+int LSession::GetMainLogicThreadStopProcess()
+{
+	return m_nMainLogicThreadStopProcessSession;
+}
+void LSession::SetEpollThreadStopProcess(int nStop)
+{
+	__sync_lock_test_and_set(&m_nEpollThreadStopProcessSession, nStop);
+}
+int LSession::GetEpollThreadSopProcess()
+{
+	return m_nEpollThreadStopProcessSession;
+}
+void LSession::SetCloseWorkSendedToCloseThread(int nSended)
+{
+	__sync_lock_test_and_set(&m_nCloseWorkSendedToCloseThread, nSended);
+}
+int LSession::GetCloseWorkSendedToCloseThread()
+{
+	return m_nCloseWorkSendedToCloseThread;
+}
+
+
+void LSession::Reset()
+{
+	m_u64SessionID 		= 0ll; 
+	__sync_lock_test_and_set(&m_nRecvThreadID, -1);
+	__sync_lock_test_and_set(&m_nSendThreadID, -1);
+	__sync_lock_test_and_set(&m_nEpollThreadID, -1);
+
+	ResetRecv();
+
+	m_bCanSend = true;
+	__sync_lock_test_and_set(&m_nLastRecvTime, 0);
+	__sync_lock_test_and_set(&m_nLastSendTime, 0);
+
+	m_FixLenCircleBufForSendData.ClearContent();
+	__sync_lock_test_and_set(&m_nSendBufIsFull, 0);
+
+	__sync_lock_test_and_set(&m_nSendThreadStopProcessSession, 0);
+	__sync_lock_test_and_set(&m_nRecvThreadStopProcessSession, 0);
+	__sync_lock_test_and_set(&m_nMainLogicThreadStopProcessSession, 0);
+	__sync_lock_test_and_set(&m_nEpollThreadStopProcessSession, 0);
+	__sync_lock_test_and_set(&m_nCloseWorkSendedToCloseThread, 0);
+
+
+	m_EpollBindParam.nSocket 		= -1;
+	m_EpollBindParam.u64SessionID = 0;
+}
+
+//	在RecvThread线程环境中执行
+void LSession::RecvData(LRecvThread* pRecvThread, bool bIsFirstRecv)
+{
+	if (pRecvThread == NULL)
+	{
+		return ;
+	}
+	LNetWorkServices* pNetWorkServices = pRecvThread->GetNetServices();
+
+	if (g_bEpollETEnabled)
+	{
+	}
+	else
+	{
+		int	nerrorCode = Recv(m_pszRecvedContent + m_unCurrentContentLen, m_unRecvBufLen - m_unCurrentContentLen);
+
+		if (nerrorCode == E_Socket_No_Recv_Data)
+		{
+			if (!AddToEpollWaitThread(pRecvThread, bIsFirstRecv))
+			{
+				pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::RecvData", __LINE__,
+																		"1 AddToEpollWaitThread(pRecvThread) Failed, SessionID:%llu\n", m_u64SessionID);
+				//	关闭连接
+				pRecvThread->AddSessionToCloseThreadToClose(this);
+				return ;
+			}
+			return ;
+		}
+		else if (nerrorCode <= 0)
+		{
+			pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::RecvData", __LINE__,
+																					"Session Recv Failed, SessionID:%llu, SystemErrorCode:%d\n", m_u64SessionID, errno);
+			//	关闭client
+			//	将关闭请求提交到closethread
+			pRecvThread->AddSessionToCloseThreadToClose(this);
+			return ;
+		}
+		else
+		{
+			m_unCurrentContentLen += nerrorCode;
+			if (m_unCurrentContentLen < sizeof(unsigned short))		//	收到的字节少于2字节，那么等待后续字节到来
+			{
+				return ;
+			}
+			else	//	有超过包头大小的数据
+			{
+				unsigned short usPacketLen = *((unsigned short*)m_pszRecvedContent);
+				if (usPacketLen > m_unMaxPacketLen)
+				{
+					pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::RecvData", __LINE__,
+																																		"1 PacketSize > MAX_PACKET_SIZE, SessionID:%llu, PacketSize:%hu, MaxPacketSize:%u\n",
+																																		m_u64SessionID, usPacketLen, m_unMaxPacketLen);
+					pRecvThread->AddSessionToCloseThreadToClose(this);
+					return ; 
+				}
+				if (usPacketLen < sizeof(unsigned short))
+				{
+					pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::RecvData", __LINE__,
+																																							"1 PacketSize < sizeof(unsigned short), SessionID:%llu, PacketSize:%hu\n",
+																																							m_u64SessionID, usPacketLen);
+					pRecvThread->AddSessionToCloseThreadToClose(this);
+					return ; 
+				}
+				while (m_unCurrentContentLen >= usPacketLen)	//	判断是否有一个完整的数据包
+				{
+					//	更新接收到数据的时间，用来判断是否需要断开空闲的连接
+					UpdateLastRecvTime();
+
+//					int nSetResult = pRecvThread->SetTempPacketData(this, m_pszRecvedContent + sizeof(unsigned short), usPacketLen - sizeof(unsigned short));
+//					if (nSetResult < 0)
+//					{
+//						pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_FATAL, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::RecvData", __LINE__,
+//																											"SetTempPacketData Failed And DeleteOneRecvPacketFromPool, SessionID:%llu, errorCode:%d\n",
+//																											m_u64SessionID, nSetResult);
+//						pRecvThread->AddSessionToCloseThreadToClose(this);
+//						return ;
+//					}
+//					if (pRecvThread->GetTempPacketDataLen() > 0)
+//					{
+//						if (!pNetWorkServices->AddRecvedPacketToMainLogicVarLenCircleBuf(E_Thread_Type_Recv, pRecvThread->m_nThreadID,
+//								pRecvThread->GetTempPacketDataBuf(), pRecvThread->GetTempPacketDataLen()))
+//						{
+//							pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_FATAL, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::RecvData", __LINE__,
+//																					"AddRecvedPacketToMainLogicVarLenCircleBuf Failed And DeleteOneRecvPacketFromPool, SessionID:%llu\n",
+//																					m_u64SessionID);
+//							//	关闭连接
+//							pRecvThread->AddSessionToCloseThreadToClose(this);
+//							return ;
+//						}
+//					}
+
+					//	改变长度
+					memcpy(m_pszRecvedContent, m_pszRecvedContent + usPacketLen, m_unCurrentContentLen - usPacketLen);
+					m_unCurrentContentLen -= usPacketLen;
+					if (m_unCurrentContentLen >= sizeof(unsigned short))	//	判断是否还有数据包
+					{
+						usPacketLen = *((unsigned short*)m_pszRecvedContent);
+						//	这里需要判断接收数据包的长度，如果长度非法，那么，关闭连接	
+						if (usPacketLen > m_unMaxPacketLen)
+						{
+							pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::RecvData", __LINE__,
+																																									"2 PacketSize > MAX_PACKET_SIZE, SessionID:%llu, PacketSize:%hu, MaxPacketSize:%u\n",
+																																									m_u64SessionID, usPacketLen, m_unMaxPacketLen);
+
+							pRecvThread->AddSessionToCloseThreadToClose(this);
+
+							return ; 
+						}
+						if (usPacketLen < sizeof(unsigned short))
+						{
+							pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::RecvData", __LINE__,
+																																														"2 PacketSize < sizeof(unsigned short), SessionID:%llu, PacketSize:%hu\n",
+																																														m_u64SessionID, usPacketLen);
+							pRecvThread->AddSessionToCloseThreadToClose(this);
+							return ; 
+						}
+					}
+					else	//	没有超过包头的数据存在，跳出循环
+					{
+						break;
+					}
+				}
+				if (!AddToEpollWaitThread(pRecvThread, bIsFirstRecv))
+				{
+					pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::RecvData", __LINE__,
+																							"2 AddToEpollWaitThread(pRecvThread) Failed, SessionID:%llu\n", m_u64SessionID);
+
+					pRecvThread->AddSessionToCloseThreadToClose(this);
+					return ;
+				}
+			}
+		}
+	}
+}
+void LSession::ResetRecv()
+{
+	memset(m_pszRecvedContent, 0, m_unRecvBufLen);
+	m_unCurrentContentLen = 0;
+}
+
+bool LSession::AddToEpollWaitThread(LRecvThread* pRecvThread, bool bIsFirstRecv)
+{
+	if (pRecvThread == NULL)
+	{
+		return false;
+	}
+
+	LNetWorkServices* pNetWorkServices = pRecvThread->GetNetServices();
+
+	//	提交epoll事件
+	struct epoll_event epollEvent;
+	memset(&epollEvent, 0, sizeof(epollEvent));
+
+	if (GetSendBufIsFull())
+	{
+		epollEvent.events = EPOLLIN | EPOLLOUT | EPOLLONESHOT;
+	}
+	else
+	{
+		epollEvent.events = EPOLLIN | EPOLLONESHOT;
+	}
+	epollEvent.data.u64 = m_EpollBindParam.u64SessionID;
+
+
+	int nEpollThreadID = GetEpollThreadID();
+	if (nEpollThreadID < 0)
+	{
+		return false;
+	}
+	LEpollThread* pEpollThread = pRecvThread->GetNetServices()->GetEpollThreadManager().GetEpollThread(nEpollThreadID);
+	if (pEpollThread == NULL)
+	{
+		pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_FATAL, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::AddToEpollWaitThread", __LINE__,
+				"pEpollThread == NULL, SessionID:%llu, SessionEpollThreadID:%d\n",
+				m_u64SessionID, nEpollThreadID);
+		return false;
+	}
+	int nEpollHandle = pEpollThread->GetEpollHandle();
+
+	if (bIsFirstRecv)
+	{
+		if (epoll_ctl(nEpollHandle, EPOLL_CTL_ADD, m_EpollBindParam.nSocket, &epollEvent) == -1)
+		{
+			pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_FATAL, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::AddToEpollWaitThread", __LINE__,
+							"epoll_ctl Failed EPOLL_CTL_ADD, SessionID:%llu, SessionEpollThreadID:%d, SocketID:%d, SystemErrorCode:%d\n",
+							m_u64SessionID, nEpollThreadID, m_EpollBindParam.nSocket, errno);
+			return false;
+		}
+	}
+	else
+	{
+		if (epoll_ctl(nEpollHandle, EPOLL_CTL_MOD, m_EpollBindParam.nSocket, &epollEvent) == -1)
+		{
+			pNetWorkServices->InfoRecorder(LOG_TYPE_RECV_THREAD, LOG_LEVEL_FATAL, LOG_SUBTYPE_LOGIC, pRecvThread->m_nThreadID, __FILE__, "LSession::AddToEpollWaitThread", __LINE__,
+							"epoll_ctl Failed EPOLL_CTL_MOD, SessionID:%llu, SessionEpollThreadID:%d, SocketID:%d, SystemErrorCode:%d\n",
+							m_u64SessionID, nEpollThreadID, m_EpollBindParam.nSocket, errno);
+			return false;
+		}
+	}
+	return true;
+}
+
+bool LSession::GetIpAndPort(char* pszBuf, unsigned short usbufLen)
+{
+	return true;
+}
+
+
+//	释放Session占用的资源
+void LSession::ReleaseSessionResource()
+{ 
+	if (m_pszRecvedContent != NULL)
+	{
+		delete[] m_pszRecvedContent;
+		m_pszRecvedContent = NULL;
+	}
+}
+
+bool LSession::AppendDataToSend(char* pData, unsigned int unDataLen)
+{
+	if (pData == NULL || unDataLen == 0)
+	{
+		return false;
+	}
+
+	if (m_FixLenCircleBufForSendData.AddItems(pData, unDataLen) != E_Circle_Buf_No_Error)
+	{
+		return false;
+	}
+	return true;
+}
+
+bool  LSession::GetSendBufIsFull()
+{
+	return m_nSendBufIsFull == 1 ? true : false;
+}
+
+int LSession::SendDataInFixCircleSendBuf(LSendThread* pSendThread, bool bFromEpollOutEvent)
+{
+	if (bFromEpollOutEvent)
+	{
+		__sync_lock_test_and_set(&m_nSendBufIsFull, 0);
+	}
+	int nContentLen = m_FixLenCircleBufForSendData.GetCurrentExistCount();
+	if (nContentLen == 0)
+	{
+		return 0;
+	}
+	int nReadIndex = 0;
+	int nWriteIndex = 0;
+	m_FixLenCircleBufForSendData.GetCurrentReadAndWriteIndex(nReadIndex, nWriteIndex);
+	if (nReadIndex == nWriteIndex)
+	{
+		return 0;
+	}
+	char* pBufStart = m_FixLenCircleBufForSendData.GetBuf();
+
+	if (nReadIndex < nWriteIndex)
+	{
+		int nResult = Send(pBufStart + nReadIndex, nWriteIndex - nReadIndex);
+		if (nResult > 0)
+		{
+			//	全部发送成功，那么将数据读索引设置成写索引，表示数据已经读取
+			m_FixLenCircleBufForSendData.SetReadIndex(nWriteIndex);
+			return nResult;
+		}
+		else		//	发送不成功，检查发送返回值
+		{
+			return SendDataFailedProcess(pSendThread, nResult);
+		}
+	}
+	else
+	{
+		//	先发送到缓冲结尾的地方，然后发送从头开始的地方
+		//	第一步，发送到结尾的数据
+		int nSendCount = 0;
+
+		int nResult = Send(pBufStart + nReadIndex, m_FixLenCircleBufForSendData.GetMaxItemCount() - nReadIndex);
+		if (nResult > 0)
+		{
+			m_FixLenCircleBufForSendData.SetReadIndex(0);
+			nSendCount += nResult;
+		}
+		else
+		{
+			return SendDataFailedProcess(pSendThread, nResult);
+		}
+		if (nWriteIndex == 0)	//	说明没有数据
+		{
+			m_FixLenCircleBufForSendData.SetReadIndex(nWriteIndex);
+			return nSendCount;
+		}
+		//	第二步， 发送到写位置的数据
+		nResult = Send(pBufStart, nWriteIndex);
+		if (nResult > 0)
+		{
+			m_FixLenCircleBufForSendData.SetReadIndex(nWriteIndex);
+			nSendCount += nResult;
+			return nSendCount;
+		}
+		else
+		{
+			return SendDataFailedProcess(pSendThread, nResult);
+		}
+	}
+}
+int LSession::SendDataFailedProcess(LSendThread* pSendThread, int nResult)
+{
+	LNetWorkServices* pNetWorkServices = pSendThread->GetNetWorkServices();
+
+	if (E_Socket_Send_System_Buf_Full == nResult)		//	缓冲满了
+	{
+		__sync_lock_test_and_set(&m_nSendBufIsFull, 1);
+		int nBindEpollThreadID = GetEpollThreadID();
+		if (nBindEpollThreadID < 0)    // 绑定的EpollThreadID小于0,那么需要关闭连接
+		{
+			pNetWorkServices->InfoRecorder(LOG_TYPE_SEND_THREAD, LOG_LEVEL_FATAL, LOG_SUBTYPE_LOGIC, pSendThread->m_nThreadID, __FILE__, "LSession::SendDataInFixCircleSendBuf", __LINE__,
+									"GetEpollThreadID, SessionID:%llu, SessionEpollThreadID:%d\n",
+									m_u64SessionID, nBindEpollThreadID);
+			return -1;
+		}
+
+		struct epoll_event epollEvent;
+		memset(&epollEvent, 0, sizeof(epollEvent));
+		epollEvent.events = EPOLLIN | EPOLLOUT | EPOLLONESHOT;
+		epollEvent.data.u64 = m_EpollBindParam.u64SessionID;
+
+		LEpollThread* pEpollThread = pNetWorkServices->GetEpollThreadManager().GetEpollThread(nBindEpollThreadID);
+		if (pEpollThread == NULL)
+		{
+			pNetWorkServices->InfoRecorder(LOG_TYPE_SEND_THREAD, LOG_LEVEL_FATAL, LOG_SUBTYPE_LOGIC, pSendThread->m_nThreadID, __FILE__, "LSession::SendDataInFixCircleSendBuf", __LINE__,
+														"GetEpollThread Failed, pEpollThread == NULL, SessionID:%llu, SessionEpollThreadID:%d\n",
+														m_u64SessionID, nBindEpollThreadID);
+			return -1;
+		}
+
+		int nEpollHandle = pEpollThread->GetEpollHandle();
+
+		if (epoll_ctl(nEpollHandle, EPOLL_CTL_MOD, m_EpollBindParam.nSocket, &epollEvent) == -1)
+		{
+			pNetWorkServices->InfoRecorder(LOG_TYPE_SEND_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, pSendThread->m_nThreadID, __FILE__, "LSession::SendDataInFixCircleSendBuf", __LINE__,
+																			"epoll_ctl Failed, SessionID:%llu, SessionEpollThreadID:%d, SocketID:%d, SystemErrorCode:%d\n",
+																			m_u64SessionID, nBindEpollThreadID, m_EpollBindParam.nSocket, errno);
+			return -1;
+		}
+		pNetWorkServices->InfoRecorder(LOG_TYPE_SEND_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, pSendThread->m_nThreadID, __FILE__, "LSession::SendDataInFixCircleSendBuf", __LINE__,
+																									"E_Socket_Send_System_Buf_Full == nResult Send Failed, SessionID:%llu, SocketID:%d, ErrorCode:%d, SystemErrorCode:%d\n",
+																									m_u64SessionID, m_EpollBindParam.nSocket, nResult, errno);
+		return 0;
+	}
+	else
+	{
+		pNetWorkServices->InfoRecorder(LOG_TYPE_SEND_THREAD, LOG_LEVEL_ERROR, LOG_SUBTYPE_LOGIC, pSendThread->m_nThreadID, __FILE__, "LSession::SendDataInFixCircleSendBuf", __LINE__,
+																							"Send Failed, SessionID:%llu, SocketID:%d, ErrorCode:%d, SystemErrorCode:%d\n",
+																							m_u64SessionID, m_EpollBindParam.nSocket, nResult, errno);
+		return -1;
+	}
+}

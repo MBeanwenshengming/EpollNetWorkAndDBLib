@@ -1,0 +1,586 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) <2010-2020> <wenshengming>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+*/
+
+#include "LFixLenCircleBuf.h"
+
+LFixLenCircleBuf::LFixLenCircleBuf()
+{
+	__sync_lock_test_and_set(&m_ReadIndex, 0);
+	__sync_lock_test_and_set(&m_WriteIndex, 0);
+
+	m_sItemSize 	= 0;
+	m_pbuf 			= NULL;
+	m_sMaxItemCount = 0; 
+}
+LFixLenCircleBuf::~LFixLenCircleBuf()
+{
+	if (m_pbuf != NULL)
+	{
+		delete[] m_pbuf;
+	}
+}
+bool LFixLenCircleBuf::Initialize(size_t sItemSize, size_t sMaxItemCount)
+{
+	if (sItemSize == 0)
+	{
+		return false;
+	}
+	if (sMaxItemCount == 0)
+	{
+		sMaxItemCount = 10;
+	}
+	if (m_pbuf != NULL)
+	{
+		__sync_lock_test_and_set(&m_ReadIndex, 0);
+		__sync_lock_test_and_set(&m_WriteIndex, 0);
+		delete[] m_pbuf;
+	}
+	m_pbuf = new char[sMaxItemCount * sItemSize];
+	if (m_pbuf == NULL)
+	{
+		return false;
+	}
+	m_sItemSize 	= sItemSize;
+	m_sMaxItemCount = sMaxItemCount;
+	return true;
+}
+E_Circle_Error LFixLenCircleBuf::AddItems(char* pbuf, size_t sItemCount)
+{
+	if (m_pbuf == NULL)
+	{
+		return E_Circle_Buf_Uninitialized;
+	}
+	if (pbuf == NULL)
+	{
+		return E_Circle_Buf_Input_Buf_Null;
+	}
+	if (sItemCount > m_sMaxItemCount - 1)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex 	= m_WriteIndex;
+
+	int nFreeItemCount = 0;
+	if (nWriteIndex < nReadIndex)
+	{
+		nFreeItemCount = nReadIndex - nWriteIndex;
+	}
+	else
+	{
+		nFreeItemCount = m_sMaxItemCount + nReadIndex - nWriteIndex; 
+	}
+	if (nFreeItemCount <= 1)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+	if (nFreeItemCount - 1 < sItemCount)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+	if (nWriteIndex < nReadIndex)
+	{
+		memcpy(m_pbuf + nWriteIndex * m_sItemSize, pbuf, sItemCount * m_sItemSize);
+		nWriteIndex += sItemCount;
+		__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+	}
+	else
+	{
+		if (nWriteIndex + sItemCount <= m_sMaxItemCount)
+		{
+			memcpy(m_pbuf + nWriteIndex * m_sItemSize, pbuf, sItemCount * m_sItemSize);
+			nWriteIndex += sItemCount;
+			if (nWriteIndex == m_sMaxItemCount)
+			{
+				nWriteIndex = 0;
+			}
+			__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+		}
+		else
+		{
+			int nFirstWriteSize = m_sMaxItemCount - nWriteIndex;
+			int nSecondWriteSize = sItemCount - nFirstWriteSize;
+			memcpy(m_pbuf + nWriteIndex * m_sItemSize, pbuf, nFirstWriteSize * m_sItemSize);
+			memcpy(m_pbuf, pbuf + nFirstWriteSize * m_sItemSize, nSecondWriteSize * m_sItemSize);
+
+			__sync_lock_test_and_set(&m_WriteIndex, nSecondWriteSize);
+		}
+	}
+	return E_Circle_Buf_No_Error;
+}
+//	m_sItemSize不为1的时候，不能调用该函数
+//	为m_sItemSize为1的固定长度环形缓存区加入内容, 数据之前放入unsigned short，表示内容的总长度， 总长度=sDataLen+sizeof(unsigned short)
+E_Circle_Error LFixLenCircleBuf::AddDataToFixCirclebufForItemSizeOneByte(char* pData, size_t sDataLen)
+{
+	if (m_pbuf == NULL)
+	{
+		return E_Circle_Buf_Uninitialized;
+	}
+	if (m_sItemSize != 1)
+	{
+		return E_Circle_Buf_Uninitialized;
+	}
+	if (pData == NULL)
+	{
+		return E_Circle_Buf_Input_Buf_Null;
+	}
+	if (sDataLen > m_sMaxItemCount - 1)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+	size_t sAllDataLen = sDataLen + sizeof(unsigned short);
+	if (sAllDataLen >= 0xFFFF)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+	//	总长度
+	unsigned short usAlldataLen = (unsigned short)sAllDataLen;
+
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex 	= m_WriteIndex;
+
+	int nFreeItemCount = 0;
+	if (nWriteIndex < nReadIndex)
+	{
+		nFreeItemCount = nReadIndex - nWriteIndex;
+	}
+	else
+	{
+		nFreeItemCount = m_sMaxItemCount + nReadIndex - nWriteIndex;
+	}
+	if (nFreeItemCount <= 1)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+	if (nFreeItemCount - 1 < usAlldataLen)
+	{
+		return E_Circle_Buf_Can_Not_Contain_Data;
+	}
+	if (nWriteIndex < nReadIndex)
+	{
+		//	先拷贝unsignedshort
+		memcpy(m_pbuf + nWriteIndex, &usAlldataLen, sizeof(unsigned short));
+		nWriteIndex += sizeof(unsigned short);
+		//	再拷贝数据
+		memcpy(m_pbuf + nWriteIndex, pData, sDataLen);
+		nWriteIndex += sDataLen;
+
+		__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+	}
+	else
+	{
+		if (nWriteIndex + usAlldataLen <= m_sMaxItemCount)
+		{
+			//	先拷贝unsignedshort
+			memcpy(m_pbuf + nWriteIndex, &usAlldataLen, sizeof(unsigned short));
+			nWriteIndex += sizeof(unsigned short);
+			//	再拷贝数据
+			memcpy(m_pbuf + nWriteIndex, pData, sDataLen);
+			nWriteIndex += sDataLen;
+			if (nWriteIndex == m_sMaxItemCount)
+			{
+				nWriteIndex = 0;
+			}
+			__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+		}
+		else
+		{
+			size_t sItemCountToEnd = m_sMaxItemCount - nWriteIndex;
+			if (sItemCountToEnd <= sizeof(unsigned short))
+			{
+				//	unsigned short 需要分成两部分写
+				if (sItemCountToEnd == sizeof(unsigned short))
+				{
+					memcpy(m_pbuf + nWriteIndex, &usAlldataLen, sizeof(unsigned short));
+					nWriteIndex = 0;
+				}
+				else
+				{
+					char* pHead = (char*)&usAlldataLen;
+					memcpy(m_pbuf + nWriteIndex, pHead, sItemCountToEnd);
+					nWriteIndex = 0;
+					memcpy(m_pbuf + nWriteIndex, pHead + sItemCountToEnd, sizeof(unsigned short) - sItemCountToEnd);
+					nWriteIndex += sizeof(unsigned short) - sItemCountToEnd;
+				}
+				//	再写入数据
+				memcpy(m_pbuf + nWriteIndex, pData, sDataLen);
+				nWriteIndex += sDataLen;
+				__sync_lock_test_and_set(&m_WriteIndex, nWriteIndex);
+			}
+			else
+			{
+				memcpy(m_pbuf + nWriteIndex, &usAlldataLen, sizeof(unsigned short));
+				nWriteIndex += sizeof(unsigned short);
+
+				int nFirstWriteDataLen = sItemCountToEnd - sizeof(unsigned short);
+			}
+		}
+	}
+}
+
+E_Circle_Error LFixLenCircleBuf::GetOneItem(char* pbuf, size_t sbufSize)
+{
+	if (m_pbuf == NULL)
+	{
+		return E_Circle_Buf_Uninitialized;
+	}
+	if (pbuf == NULL)
+	{
+		return E_Circle_Buf_Input_Buf_Null;
+	}
+	if (sbufSize < m_sItemSize)
+	{
+		return E_Circle_Buf_Input_Buf_Not_Enough_Len;
+	}
+
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex 	= m_WriteIndex;
+
+	if (nReadIndex == nWriteIndex)
+	{
+		return E_Circle_Buf_Is_Empty;
+	}
+	int nCurrentItemCount  = 0;
+	if (nReadIndex < nWriteIndex)
+	{
+		nCurrentItemCount = nWriteIndex - nReadIndex;
+	}
+	else
+	{
+		nCurrentItemCount = m_sMaxItemCount + nWriteIndex - nReadIndex;
+	}
+	if (nCurrentItemCount == 0)
+	{
+		return E_Circle_Buf_Is_Empty;
+	}
+	memcpy(pbuf, m_pbuf + nReadIndex * m_sItemSize, m_sItemSize);
+	nReadIndex++;
+	if (nReadIndex == m_sMaxItemCount)
+	{
+		nReadIndex = 0;
+	}
+	__sync_lock_test_and_set(&m_ReadIndex, nReadIndex);
+
+
+	return E_Circle_Buf_No_Error;
+}
+
+int LFixLenCircleBuf::RequestItems(LFixLenCircleBuf* pFixCircleBuf, size_t sExpecttedCount)
+{
+	if (m_pbuf == NULL)
+	{
+		return 0;
+	}
+	if (pFixCircleBuf == NULL)
+	{
+		return 0;
+	}
+
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex 	= m_WriteIndex;
+	if (nReadIndex == nWriteIndex)
+	{
+		return 0;
+	}
+	if (nReadIndex < nWriteIndex)
+	{
+		int nExisttedBufCount = nWriteIndex - nReadIndex;
+		if (nExisttedBufCount <= sExpecttedCount)
+		{
+			if (pFixCircleBuf->AddItems(m_pbuf + nReadIndex * m_sItemSize, nExisttedBufCount) != E_Circle_Buf_No_Error)
+			{
+				return 0;
+			}
+
+			__sync_lock_test_and_set(&m_ReadIndex, nWriteIndex);
+			return nExisttedBufCount;
+		}
+		else
+		{ 
+			if (pFixCircleBuf->AddItems(m_pbuf + nReadIndex * m_sItemSize, sExpecttedCount) != E_Circle_Buf_No_Error)
+			{
+				return 0;
+			}
+			nReadIndex += sExpecttedCount;
+
+			__sync_lock_test_and_set(&m_ReadIndex, nReadIndex);
+			return sExpecttedCount;
+		}
+	}
+	else
+	{ 
+		int nCountFromCurrentReadIndexToEnd = m_sMaxItemCount - nReadIndex;
+		if (nCountFromCurrentReadIndexToEnd > sExpecttedCount)
+		{
+			if (pFixCircleBuf->AddItems(m_pbuf + nReadIndex * m_sItemSize, sExpecttedCount) != E_Circle_Buf_No_Error)
+			{
+				return 0;
+			}
+			nReadIndex += sExpecttedCount;
+
+			__sync_lock_test_and_set(&m_ReadIndex, nReadIndex);
+			return sExpecttedCount; 
+		}
+		else if (nCountFromCurrentReadIndexToEnd == sExpecttedCount)
+		{ 
+			if (pFixCircleBuf->AddItems(m_pbuf + nReadIndex * m_sItemSize, sExpecttedCount) != E_Circle_Buf_No_Error)
+			{
+				return 0;
+			}
+
+			__sync_lock_test_and_set(&m_ReadIndex, 0);
+			return sExpecttedCount; 
+		}
+		else
+		{ 
+			if (pFixCircleBuf->AddItems(m_pbuf + nReadIndex * m_sItemSize, nCountFromCurrentReadIndexToEnd) != E_Circle_Buf_No_Error)
+			{
+				return 0;
+			}
+
+			__sync_lock_test_and_set(&m_ReadIndex, 0);
+			return nCountFromCurrentReadIndexToEnd; 
+		}
+	}
+}
+
+bool LFixLenCircleBuf::CopyAllItemsToOtherFixLenCircleBuf(LFixLenCircleBuf* pFixCircleBuf)
+{
+	if (m_pbuf == NULL)
+	{
+		return false;
+	}
+	if (pFixCircleBuf == NULL)
+	{
+		return false;
+	}
+
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex 	= m_WriteIndex;
+	if (nReadIndex == nWriteIndex)
+	{
+		return true;
+	}
+	if (nReadIndex < nWriteIndex)
+	{
+		if (pFixCircleBuf->AddItems(m_pbuf + nReadIndex * m_sItemSize, nWriteIndex - nReadIndex) != E_Circle_Buf_No_Error)
+		{
+			return false;
+		}
+		else
+		{ 
+			__sync_lock_test_and_set(&m_ReadIndex, nWriteIndex);
+			return true;
+		}
+	}
+	else
+	{
+		if (pFixCircleBuf->AddItems(m_pbuf + nReadIndex * m_sItemSize, m_sMaxItemCount - nReadIndex) != E_Circle_Buf_No_Error)
+		{
+			return false;
+		}
+		else
+		{
+			__sync_lock_test_and_set(&m_ReadIndex, 0);
+		}
+		if (pFixCircleBuf->AddItems(m_pbuf, nWriteIndex) != E_Circle_Buf_No_Error)
+		{
+			return false;
+		}
+		else
+		{
+			__sync_lock_test_and_set(&m_ReadIndex, nWriteIndex);
+		}
+		return true;
+	}
+	return false;
+}
+void LFixLenCircleBuf::GetCurrentReadAndWriteIndex(int& nReadIndex, int& nWriteIndex)
+{
+	nReadIndex 		= m_ReadIndex;
+	nWriteIndex 	= m_WriteIndex;
+}
+void LFixLenCircleBuf::ClearContent()
+{
+	__sync_lock_test_and_set(&m_ReadIndex, 0);
+	__sync_lock_test_and_set(&m_WriteIndex, 0);
+}
+
+char* LFixLenCircleBuf::GetBuf()
+{
+	return m_pbuf;
+}
+void LFixLenCircleBuf::SetReadIndex(int nReadIndex)
+{
+	__sync_lock_test_and_set(&m_ReadIndex, nReadIndex);
+}
+int LFixLenCircleBuf::GetMaxItemCount()
+{
+	return (int)m_sMaxItemCount;
+}
+int LFixLenCircleBuf::GetCurrentExistCount()
+{
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex	= m_WriteIndex;
+	if (nWriteIndex == nReadIndex)
+	{
+		return 0;
+	}
+	if (nWriteIndex > nReadIndex)
+	{
+		return nWriteIndex - nReadIndex;
+	}
+	else
+	{
+		return m_sMaxItemCount - nReadIndex + nWriteIndex;
+	}
+}
+
+//	从缓存区中获取一个Item，但是并不删除
+E_Circle_Error LFixLenCircleBuf::LookUpOneItem(char* pbuf, size_t sbufSize)
+{
+	if (m_pbuf == NULL)
+	{
+		return E_Circle_Buf_Uninitialized;
+	}
+	if (pbuf == NULL)
+	{
+		return E_Circle_Buf_Input_Buf_Null;
+	}
+	if (sbufSize < m_sItemSize)
+	{
+		return E_Circle_Buf_Input_Buf_Not_Enough_Len;
+	}
+
+	int nReadIndex		= m_ReadIndex;
+	int nWriteIndex	= m_WriteIndex;
+
+	if (nReadIndex == nWriteIndex)
+	{
+		return E_Circle_Buf_Is_Empty;
+	}
+	int nCurrentItemCount  = 0;
+	if (nReadIndex < nWriteIndex)
+	{
+		nCurrentItemCount = nWriteIndex - nReadIndex;
+	}
+	else
+	{
+		nCurrentItemCount = m_sMaxItemCount + nWriteIndex - nReadIndex;
+	}
+	if (nCurrentItemCount == 0)
+	{
+		return E_Circle_Buf_Is_Empty;
+	}
+	memcpy(pbuf, m_pbuf + nReadIndex * m_sItemSize, m_sItemSize);
+	return E_Circle_Buf_No_Error;
+}
+//	查看从当前位置开始的第nAddedReadIndex个数据
+E_Circle_Error LFixLenCircleBuf::LookUpNItem(char* pbuf, size_t sbufSize, int nAddedReadIndex)
+{
+	if (m_pbuf == NULL)
+	{
+		return E_Circle_Buf_Uninitialized;
+	}
+	if (pbuf == NULL)
+	{
+		return E_Circle_Buf_Input_Buf_Null;
+	}
+	if (sbufSize < m_sItemSize)
+	{
+		return E_Circle_Buf_Input_Buf_Not_Enough_Len;
+	}
+
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex 	= m_WriteIndex;
+
+	if (nReadIndex == nWriteIndex)
+	{
+		return E_Circle_Buf_Is_Empty;
+	}
+	int nCurrentItemCount  = 0;
+	if (nReadIndex < nWriteIndex)
+	{
+		nCurrentItemCount = nWriteIndex - nReadIndex;
+	}
+	else
+	{
+		nCurrentItemCount = m_sMaxItemCount + nWriteIndex - nReadIndex;
+	}
+	if (nCurrentItemCount == 0)
+	{
+		return E_Circle_Buf_Is_Empty;
+	}
+	if (nAddedReadIndex > nCurrentItemCount)
+	{
+		return E_Circle_Buf_Is_Empty;
+	}
+	if (nReadIndex < nWriteIndex)
+	{
+		memcpy(pbuf, m_pbuf + (nReadIndex + nAddedReadIndex) * m_sItemSize, m_sItemSize);
+	}
+	else
+	{
+		if (nReadIndex + nAddedReadIndex >= m_sMaxItemCount)
+		{
+			memcpy(pbuf, m_pbuf + (nReadIndex + nAddedReadIndex - m_sMaxItemCount) * m_sItemSize, m_sItemSize);
+		}
+		else
+		{
+			memcpy(pbuf, m_pbuf + (nReadIndex + nAddedReadIndex) * m_sItemSize, m_sItemSize);
+		}
+	}
+	return E_Circle_Buf_No_Error;
+}
+
+//	删除缓存区头部一个Item, 与LookUpOneItem配合使用
+E_Circle_Error LFixLenCircleBuf::DeleteOneItemAtHead()
+{
+	int nReadIndex 	= m_ReadIndex;
+	int nWriteIndex 	= m_WriteIndex;
+	if (nReadIndex == nWriteIndex)
+	{
+		return E_Circle_Buf_Is_Empty;
+	}
+	int nCurrentItemCount  = 0;
+	if (nReadIndex < nWriteIndex)
+	{
+		nCurrentItemCount = nWriteIndex - nReadIndex;
+	}
+	else
+	{
+		nCurrentItemCount = m_sMaxItemCount + nWriteIndex - nReadIndex;
+	}
+	if (nCurrentItemCount == 0)
+	{
+		return E_Circle_Buf_Is_Empty;
+	}
+	nReadIndex++;
+	if (nReadIndex == m_sMaxItemCount)
+	{
+		nReadIndex = 0;
+	}
+	__sync_lock_test_and_set(&m_ReadIndex, nReadIndex);
+	return E_Circle_Buf_No_Error;
+}
